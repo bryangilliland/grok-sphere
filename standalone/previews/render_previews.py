@@ -77,9 +77,9 @@ def eyes(col, w=EYE_W, h=EYE_H, cy=EYE_CY, dots=False, status="", reply="", mood
         for i in range(2):
             cx = 180 + (-EYE_DX if i == 0 else EYE_DX)
             capsule(d, cx, cy + 8, 72, 88, col)
-            lx = cx - 54 + (-8 if i == 0 else 8)
-            ly = (cy + 8) - 56
-            draw_rotated_rect(im, lx, ly, 108, 52, -20 if i == 0 else 20, (0, 0, 0))
+            lx = cx - 68 if i == 0 else cx - 20
+            ly = (cy + 8) - 64
+            d.rounded_rectangle((lx, ly, lx + 88, ly + 66), radius=33, fill=(0, 0, 0))
     elif mood == "bored":
         gx = 10
         for i in range(2):
@@ -97,8 +97,8 @@ def eyes(col, w=EYE_W, h=EYE_H, cy=EYE_CY, dots=False, status="", reply="", mood
             cx = 180 + (-EYE_DX if i == 0 else EYE_DX)
             capsule(d, cx, cy - 10, 88, 148, col)
     elif mood == "curious":
-        draw_rotated_capsule(im, 180 - EYE_DX, cy - 8, 82, 134, col, -4)
-        draw_rotated_capsule(im, 180 + EYE_DX, cy + 6, 68, 84, col, 4)
+        capsule(d, 180 - EYE_DX, cy - 8, 82, 134, col)
+        capsule(d, 180 + EYE_DX, cy + 6, 68, 84, col)
     elif dots:
         capsule(d, 180 - EYE_DX, cy - 22, 78, 66, col)
         capsule(d, 180 + EYE_DX, cy - 22, 68, 48, col)

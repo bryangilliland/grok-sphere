@@ -150,7 +150,7 @@ esp_err_t display_init(bool mirror_x)
     esp_timer_handle_t tick;
     ESP_ERROR_CHECK(esp_timer_create(&targs, &tick));
     ESP_ERROR_CHECK(esp_timer_start_periodic(tick, LVGL_TICK_MS * 1000));
-    xTaskCreatePinnedToCore(lvgl_task, "lvgl", 8192, NULL, 4, NULL, 1);
+    xTaskCreatePinnedToCore(lvgl_task, "lvgl", 12288, NULL, 4, NULL, 1);
 
     board_backlight_set(80);
     return ESP_OK;
