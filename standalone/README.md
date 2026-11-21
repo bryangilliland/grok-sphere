@@ -1,4 +1,4 @@
-# Grok Sphere: standalone Thad (firmware 2.3.1-standalone)
+# Grok Sphere: standalone Thad (firmware 2.3.2-standalone)
 
 The sphere talks to Claude on its own over Wi-Fi, with offline wake-word detection on the ESP32-S3. The laptop is only used to flash in Edge.
 Hardware: Waveshare ESP32-S3-Touch-LCD-1.85C-BOX (16 MB flash, 8 MB PSRAM).
@@ -10,7 +10,13 @@ Hardware: Waveshare ESP32-S3-Touch-LCD-1.85C-BOX (16 MB flash, 8 MB PSRAM).
 
 See `SETUP_GUIDE.txt` for the 6-step phone setup.
 
-## What's new in 2.3.1-standalone
+## What's new in 2.3.2-standalone
+- **Pre-trigger noise baseline & non-discarding STT:** measures the 35th-percentile room noise floor from the ~1.5 s ring buffer *before* wake/tap (so your speech never inflates the noise threshold), combines WebRTC/ESP-SR VAD (`vad_mode=2`) with a relative energy drop (`short_rms < 1.3x` baseline for 900 ms, min 1.5 s, max 8 s), and **never** discards tap/wake audio locally — Deepgram decides whether speech was present.
+- **WakeNet9 in noise & wake word clarity:** enables ESP-SR AFE VAD (`VAD_MODE_2`) and `DET_MODE_95` for better recall near TVs/speakers, and documents that the Jarvis model triggers on **"Jarvis"** (not "Hey Jarvis").
+- **Internal RAM relief (PSRAM offload):** shrinks LVGL draw strips from 40 to 20 lines (saving 28.8 KB internal DMA RAM), sets `CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=512`, enables `CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY`, and moves task stacks (`lvgl`, `thad`, `weather`), `tone[]`, scan results, HTTP/diagnostic buffers to PSRAM (leaving ~110+ KB internal heap free at idle instead of ~4 KB).
+- **Expanded Diagnostics:** adds **Noise floor**, **Speech detected**, **Recorded seconds**, and **min internal heap** on `http://grok-sphere.local`.
+
+## Prior 2.3.1-standalone
 - **Boot & LVGL render fix:** removed LVGL `transform_angle` software-layer draws (which require `LV_COLOR_SCREEN_TRANSP` and allocate layer buffers at render time), added geometry/style dirty-checking (0 redundant flushes when static), bumped LVGL task stack to 12 KB, and guarded mood overlay init so boot always flushes plain capsule eyes first.
 - **Robust voice capture & watchdogs:** DC-offset-removed RMS + adaptive noise floor for end-of-speech detection (~900 ms trailing silence), 0.6 s minimum / 8 s hard cap (always proceeds to STT), 5 s no-speech timeout (`Didn't catch that`), tap-while-listening stops recording and sends immediately, chime off by default (optional **Chime** toggle on setup page), and per-stage error/stall watchdogs (`Mic: no audio`, `No internet`, `Deepgram key rejected`, `Claude error ...`).
 - **Emotional capsule eyes:** builds on the original capsule eyes with **Happy**, **Curious**, **Surprised**, **Sad**, **Bored** (after 2 min idle), and **Sleepy** (after 10 min idle, wakes immediately on wake word/tap), plus natural blinks, idle glances, optional hidden `[mood:...]` tags from Claude (stripped before TTS), and a **Preview moods** button on the setup page.
@@ -20,7 +26,7 @@ See `SETUP_GUIDE.txt` for the 6-step phone setup.
 - **Hands-free wake word (offline):** runs ESP-SR WakeNet9 (`espressif/esp-sr`) directly on the sphere's mic with no cloud account. Four English wake words are bundled in the app image (no partition table change):
   - **Hi, ESP** (`wn9_hiesp`, default — trained on real voices)
   - **Alexa** (`wn9_alexa` — trained on real voices)
-  - **Jarvis** (`wn9_jarvis_tts`)
+  - **Jarvis** (`wn9_jarvis_tts` — say **"Jarvis"**, not "Hey Jarvis")
   - **Computer** (`wn9_computer_tts`)
   - Toggle on/off or switch words any time on the setup page. Wake detection pauses automatically while listening, thinking, or speaking so it cannot self-trigger.
 - **Speech-to-text & text-to-speech:** Anthropic's API is text+image in, text out only, so talking out loud uses a **Deepgram** key:
@@ -43,5 +49,5 @@ See `SETUP_GUIDE.txt` for the 6-step phone setup.
 ## Layout
 - `bin/`: merged bin (`0x0`) and app-only update bin (`0x10000`).
 - `firmware/`: ESP-IDF 5.4.2 project (`idf.py build && idf.py merge-bin -o grok_sphere_standalone.bin`). `pack_wake_models.py` packs the 4 WakeNet9 models from `espressif/esp-sr` at build time so `partitions.csv` stays unchanged.
-- `firmware/host_test/run_host_tests.sh`: 272 host checks (wake catalog, voice catalog, mood tag parser, form parsing, setup page + diagnostics with key never echoed, Claude/Deepgram JSON, speech cleanup, WAV, DC-removed AC RMS & VAD).
+- `firmware/host_test/run_host_tests.sh`: 543 host checks (wake catalog, voice catalog, mood tag parser, form parsing, setup page + diagnostics with key never echoed, Claude/Deepgram JSON, speech cleanup, WAV, DC-removed AC RMS & VAD).
 - `previews/`: screen states, emotional capsule-eye moods sheet, and phone setup page screenshots.

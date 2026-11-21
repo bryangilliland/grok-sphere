@@ -4,4 +4,4 @@ Grok Sphere standalone - setup (phone friendly)
 3. Setup page opens (or http://192.168.4.1). Pick home Wi-Fi + password, paste your Claude key, tap Save.
 4. Optional for voice: paste a free Deepgram key (console.deepgram.com, $200 credit, no card), pick a voice & wake word (chime is off by default), tap Save.
 5. The sphere joins Wi-Fi and the eyes appear. Later settings & diagnostics: http://grok-sphere.local or the IP it shows.
-6. Say "Hi, ESP" (or tap screen / BOOT) and talk when the eyes turn cyan; tap again to send immediately, or pause and it sends automatically (8 s max). Tap while speaking to hush. Hold screen = clock. Hold BOOT 4 s = setup hotspot.
+6. Say "Hi, ESP" (or "Jarvis" / "Alexa" / "Computer" if selected — no "Hey" before Jarvis, or tap screen / BOOT) and talk when the eyes turn cyan; tap again to send immediately, or pause and it sends automatically (8 s max). Tap while speaking to hush. Hold screen = clock. Hold BOOT 4 s = setup hotspot.
