@@ -68,6 +68,10 @@ static void test_page(void)
     CHECK(strstr(page, "action=/ask") && strstr(page, "What&#39;s 2+2?") && strstr(page, "Four."));
     CHECK(strstr(page, "<option value=0 selected>Haiku"));
     CHECK(strstr(page, "value=\"aura-2-orion-en\" selected"));
+    CHECK(strstr(page, "Orion (calm male, US)"));
+    CHECK(strstr(page, "value=\"aura-2-draco-en\"") && strstr(page, "Draco (warm male, British)"));
+    CHECK(strstr(page, "value=\"aura-2-amalthea-en\"") && strstr(page, "Amalthea (cheerful female, Filipino)"));
+    CHECK(strstr(page, "formaction=/preview") && strstr(page, "Preview this voice"));
     CHECK(strstr(page, "name=dgkey") && strstr(page, "console.deepgram.com"));
     CHECK(strstr(page, "type=password") != NULL);
     /* first boot: no key -> no ask box, Sonnet selected shows */
@@ -89,7 +93,28 @@ static void test_models_voices(void)
     CHECK(strcmp(au_model_id(7), "claude-haiku-5-5") == 0);
     CHECK(au_thinking_mode_for("claude-haiku-5-5") == 1);
     CHECK(au_thinking_mode_for("claude-sonnet-5-5") == 2);
+    CHECK(strcmp(AU_DEFAULT_VOICE, "aura-2-orion-en") == 0);
     CHECK(au_voice_valid(AU_DEFAULT_VOICE) && !au_voice_valid("aura-2-evil\"><script>") && !au_voice_valid(NULL));
+    CHECK(AU_VOICE_COUNT >= 15);
+    CHECK(strcmp(AU_VOICES[0].id, AU_DEFAULT_VOICE) == 0);
+    /* every catalog id is a real Aura-2 English model (docs: developers.deepgram.com/docs/tts-models) */
+    static const char *required[] = {
+        "aura-2-orion-en", "aura-2-apollo-en", "aura-2-arcas-en", "aura-2-aries-en", "aura-2-zeus-en",
+        "aura-2-draco-en", "aura-2-hyperion-en", "aura-2-thalia-en", "aura-2-helena-en",
+        "aura-2-andromeda-en", "aura-2-athena-en", "aura-2-luna-en", "aura-2-pandora-en",
+        "aura-2-theia-en", "aura-2-amalthea-en",
+    };
+    for (int r = 0; r < (int)(sizeof(required) / sizeof(required[0])); r++)
+        CHECK(au_voice_valid(required[r]));
+    /* ids are safe to drop into HTML attributes; labels are unique and mention gender */
+    for (int i = 0; i < AU_VOICE_COUNT; i++) {
+        CHECK(strncmp(AU_VOICES[i].id, "aura-2-", 7) == 0);
+        CHECK(strchr(AU_VOICES[i].id, '"') == NULL && strchr(AU_VOICES[i].id, '<') == NULL);
+        CHECK(strstr(AU_VOICES[i].label, "male") != NULL || strstr(AU_VOICES[i].label, "female") != NULL);
+        for (int j = i + 1; j < AU_VOICE_COUNT; j++)
+            CHECK(strcmp(AU_VOICES[i].id, AU_VOICES[j].id) != 0);
+    }
+    CHECK(strstr(AU_PREVIEW_TEXT, "Thad") != NULL);
 }
 
 static void test_claude_request(void)

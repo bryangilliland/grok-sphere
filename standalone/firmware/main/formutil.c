@@ -108,7 +108,7 @@ int net_setup_page_build(char *out, size_t cap, const setup_page_info_t *in)
         "label{display:block;margin:14px 0 6px;font-weight:600}"
         "input,select,textarea{width:100%;box-sizing:border-box;padding:12px;font-size:17px;border-radius:10px;border:1px solid #2a2f3a;background:#0d1016;color:#fff}"
         "small{color:#8A93A3;display:block;margin-top:4px}"
-        "button{margin-top:18px;width:100%;padding:14px;font-size:18px;border:0;border-radius:12px;background:#EAF2FF;color:#000;font-weight:700}"
+        "button{margin-top:18px;width:100%;padding:14px;font-size:18px;border:0;border-radius:12px;background:#EAF2FF;color:#000;font-weight:700}.preview{margin-top:10px;background:#151922;color:#EAF2FF;border:1px solid #2a2f3a;font-size:16px}"
         ".sec{background:#151922;color:#C8CED8;border:1px solid #2a2f3a;font-size:15px}"
         ".ok{background:#10251a;border:1px solid #1f5c3a;color:#bff5d3;padding:10px;border-radius:10px}"
         ".card{background:#0d1016;border:1px solid #2a2f3a;border-radius:12px;padding:12px;margin-top:10px}"
@@ -165,6 +165,8 @@ int net_setup_page_build(char *out, size_t cap, const setup_page_info_t *in)
         A(line);
     }
     A("</select>");
+    A("<button type=submit class=preview formaction=/preview>Preview this voice</button>"
+      "<small>Hear a short sample on the sphere. Save afterwards to keep the voice. Needs a saved Deepgram key.</small>");
     snprintf(line, sizeof(line), "<label>Volume</label><input name=vol type=range min=10 max=100 value=%d>",
              in->volume < 10 ? 10 : (in->volume > 100 ? 100 : in->volume));
     A(line);

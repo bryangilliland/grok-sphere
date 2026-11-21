@@ -272,6 +272,38 @@ static esp_err_t h_save(httpd_req_t *req)
     return send_page(req, "Saved.");
 }
 
+static esp_err_t h_preview(httpd_req_t *req)
+{
+    char *body = calloc(1, BODY_MAX);
+    char voice[40] = "";
+    if (!body) return ESP_ERR_NO_MEM;
+    if (read_body(req, body, BODY_MAX) >= 0)
+        net_form_get(body, "voice", voice, sizeof(voice));
+    memset(body, 0, BODY_MAX);
+    free(body);
+
+    sphere_settings_t s;
+    app_settings_get(&s);
+    bool have_speech = s.speech_key[0] != 0;
+    memset(&s.api_key, 0, sizeof(s.api_key));
+    memset(&s.speech_key, 0, sizeof(s.speech_key));
+    memset(&s.pass, 0, sizeof(s.pass));
+
+    const char *notice;
+    if (!net_is_connected()) {
+        notice = "Preview needs Wi-Fi.";
+    } else if (!have_speech) {
+        notice = "Save a Deepgram key first, then tap Preview.";
+    } else if (assistant_busy()) {
+        notice = "Wait until Thad finishes, then tap Preview.";
+    } else {
+        assistant_preview(au_voice_valid(voice) ? voice : s.voice);
+        notice = "Playing a short sample on the sphere.";
+    }
+    memset(&s, 0, sizeof(s));
+    return send_page(req, notice);
+}
+
 static esp_err_t h_ask(httpd_req_t *req)
 {
     char *body = calloc(1, BODY_MAX);
@@ -330,8 +362,9 @@ void net_http_start(void)
     httpd_uri_t u[] = {
         { .uri = "/",      .method = HTTP_GET,  .handler = h_root },
         { .uri = "/save",  .method = HTTP_POST, .handler = h_save },
-        { .uri = "/ask",   .method = HTTP_POST, .handler = h_ask },
-        { .uri = "/flash", .method = HTTP_POST, .handler = h_flash },
+        { .uri = "/ask",     .method = HTTP_POST, .handler = h_ask },
+        { .uri = "/preview", .method = HTTP_POST, .handler = h_preview },
+        { .uri = "/flash",   .method = HTTP_POST, .handler = h_flash },
         { .uri = "/reset", .method = HTTP_POST, .handler = h_reset },
     };
     for (size_t i = 0; i < sizeof(u) / sizeof(u[0]); i++) httpd_register_uri_handler(s_httpd, &u[i]);
