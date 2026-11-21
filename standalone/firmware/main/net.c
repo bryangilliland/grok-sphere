@@ -11,6 +11,7 @@
 #include "app.h"
 #include "assist_util.h"
 #include "assistant.h"
+#include "clock_weather.h"
 #include "esp_event.h"
 #include "esp_http_server.h"
 #include "esp_log.h"
@@ -51,6 +52,10 @@ static void retry_cb(void *arg) { (void)arg; if (s_sta_wanted) esp_wifi_connect(
 bool net_is_connected(void) { return s_ev && (xEventGroupGetBits(s_ev) & BIT_CONNECTED); }
 bool net_portal_running(void) { return s_portal; }
 const char *net_ip_str(void) { return net_is_connected() ? s_ip : ""; }
+void net_set_wifi_ps(bool no_power_save) {
+    esp_wifi_set_ps(no_power_save ? WIFI_PS_NONE : WIFI_PS_MIN_MODEM);
+}
+
 int net_wifi_rssi(void) {
     if (!net_is_connected()) return 0;
     wifi_ap_record_t ap;
@@ -181,7 +186,7 @@ static esp_err_t send_page(httpd_req_t *req, const char *notice)
         .ssid = s.ssid, .wifi_connected = net_is_connected(), .ip = net_ip_str(),
         .api_key_masked = akm, .speech_key_masked = dkm, .model = s.model, .voice = s.voice,
         .volume = s.volume, .mirror_x = s.mirror_x, .wake_enabled = s.wake_enabled, .wake_word = s.wake_word,
-        .chime_enabled = s.chime_enabled, .scan_ssids = scans, .scan_n = nscan,
+        .chime_enabled = s.chime_enabled, .location = s.location, .scan_ssids = scans, .scan_n = nscan,
         .last_q = diag->last_q, .last_a = diag->last_a, .notice = notice,
         .diag_err = diag->last_err, .diag_mic_peak = diag->mic_peak, .diag_mic_rms = diag->mic_rms,
         .diag_noise_floor = diag->noise_floor, .diag_speech_detected = diag->speech_detected,
@@ -249,6 +254,11 @@ static esp_err_t h_save(httpd_req_t *req)
     s.wake_enabled = net_form_get(body, "wakeon", tmp, sizeof(tmp));
     if (net_form_get(body, "wake", tmp, sizeof(tmp)) && au_wake_valid(tmp)) strcpy(s.wake_word, tmp);
     s.chime_enabled = net_form_get(body, "chime", tmp, sizeof(tmp));
+    if (net_form_get(body, "loc", tmp, sizeof(s.location))) {
+        au_trim(tmp);
+        if (tmp[0]) snprintf(s.location, sizeof(s.location), "%.63s", tmp);
+        else strcpy(s.location, "Fort Worth, TX");
+    }
     s.mirror_x = net_form_get(body, "mirror", tmp, sizeof(tmp));
     if (net_form_get(body, "ssid", tmp, sizeof(s.ssid))) {
         au_trim(tmp);
@@ -272,6 +282,7 @@ static esp_err_t h_save(httpd_req_t *req)
         return send_page(req, "Saved. Now enter your home Wi-Fi name and password.");
     }
     app_settings_apply(&s, wifi_changed);
+    clock_weather_refresh();
     memset(&s, 0, sizeof(s));
     if (wifi_changed) {
         httpd_resp_set_type(req, "text/html");

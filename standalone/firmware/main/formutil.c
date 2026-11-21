@@ -187,6 +187,9 @@ int net_setup_page_build(char *out, size_t cap, const setup_page_info_t *in)
       ? "<label class=cb><input type=checkbox name=chime value=1 checked>Chime when listening starts</label>"
       : "<label class=cb><input type=checkbox name=chime value=1>Chime when listening starts</label>");
     A("<small>Off by default (cyan eyes show when it is listening).</small>");
+    A("<label>Weather location</label><input name=loc maxlength=63 placeholder='Fort Worth, TX' value=\"");
+    E((in->location && in->location[0]) ? in->location : "Fort Worth, TX");
+    A("\"><small>City name (e.g. Fort Worth, TX) or lat, lon (e.g. 32.7555, -97.3308). Used for clock &amp; Thad's live forecast.</small>");
 
     A("<h2>3. Home Wi-Fi</h2><label>Wi-Fi name</label><input name=ssid list=nets autocomplete=off autocapitalize=off value=\"");
     E(in->ssid);

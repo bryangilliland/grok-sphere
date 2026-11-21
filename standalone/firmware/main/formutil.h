@@ -22,6 +22,7 @@ typedef struct {
     bool wake_enabled;
     const char *wake_word;
     bool chime_enabled;
+    const char *location;
     const char *const *scan_ssids;
     int scan_n;
     const char *last_q;          /* last question / answer (may be NULL) */

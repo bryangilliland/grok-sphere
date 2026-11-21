@@ -15,4 +15,6 @@ void net_start_portal(void);
 bool net_portal_running(void);
 void net_stop_portal(void);
 int net_portal_clients(void);
-void net_mdns_start(void);            /* grok-sphere.local */
+void net_mdns_start(void);
+/* Disable Wi-Fi modem power save while streaming/speaking for glitch-free TLS. */
+void net_set_wifi_ps(bool no_power_save);            /* grok-sphere.local */
