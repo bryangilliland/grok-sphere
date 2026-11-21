@@ -1,0 +1,110 @@
+[
+  {
+    "dest": "flasher/grok_sphere_thad_merged.bin",
+    "sha256": "8db35ead6e23b4ef9c799a84a80d80c2cb69723d6025ab7d93d0c5bbd8b7ba46",
+    "bytes": 1552960,
+    "parts": [
+      "binary_payload/flasher__grok_sphere_thad_merged.bin.b64.01",
+      "binary_payload/flasher__grok_sphere_thad_merged.bin.b64.02",
+      "binary_payload/flasher__grok_sphere_thad_merged.bin.b64.03"
+    ]
+  },
+  {
+    "dest": "flasher/parts/bootloader.bin",
+    "sha256": "f045916464809e4b38bcca9f44dc4b666ab1d865e2430cabc0b8ded7a3fa335d",
+    "bytes": 22368,
+    "parts": [
+      "binary_payload/flasher__parts__bootloader.bin.b64"
+    ]
+  },
+  {
+    "dest": "flasher/parts/grok_sphere.bin",
+    "sha256": "e5c345c94c90ef0090e849edd92d635b904485f137c21b22f05e5746a9e140e3",
+    "bytes": 1487424,
+    "parts": [
+      "binary_payload/flasher__parts__grok_sphere.bin.b64.01",
+      "binary_payload/flasher__parts__grok_sphere.bin.b64.02",
+      "binary_payload/flasher__parts__grok_sphere.bin.b64.03"
+    ]
+  },
+  {
+    "dest": "flasher/parts/partition-table.bin",
+    "sha256": "fabcbebf733457e9706b46544b2a1cb9672a8e1ce626f5dc7d7e6fb4738d5b0e",
+    "bytes": 3072,
+    "parts": [
+      "binary_payload/flasher__parts__partition-table.bin.b64"
+    ]
+  },
+  {
+    "dest": "previews/state_clock_weather.png",
+    "sha256": "691c8dfcefaf3bf55328aaee5cb56a42add487a7366d68ebb3f1f8b5c391587d",
+    "bytes": 10962,
+    "parts": [
+      "binary_payload/previews__state_clock_weather.png.b64"
+    ]
+  },
+  {
+    "dest": "previews/state_error.png",
+    "sha256": "1f76368f434691e6c7f973e6b15b2feaf899deeee21b7d2aa63e926c4e1d3109",
+    "bytes": 4456,
+    "parts": [
+      "binary_payload/previews__state_error.png.b64"
+    ]
+  },
+  {
+    "dest": "previews/state_idle.png",
+    "sha256": "d3e3ad90b9695191d0ebd0b1fb399affc1c5ee960b944ae7833dfb0e6b3fbf82",
+    "bytes": 1254,
+    "parts": [
+      "binary_payload/previews__state_idle.png.b64"
+    ]
+  },
+  {
+    "dest": "previews/state_idle_blink.png",
+    "sha256": "a305484b5ccd0c8968f1788ee1353dea905888fb9377d75d455a8757d08059e4",
+    "bytes": 554,
+    "parts": [
+      "binary_payload/previews__state_idle_blink.png.b64"
+    ]
+  },
+  {
+    "dest": "previews/state_listening.png",
+    "sha256": "ccda8cdfbc1aa902b026330affd698447f9fb3cc6a43220ddd0e78075bb8cb73",
+    "bytes": 3559,
+    "parts": [
+      "binary_payload/previews__state_listening.png.b64"
+    ]
+  },
+  {
+    "dest": "previews/state_offline_waiting.png",
+    "sha256": "dab1d5154770b3169104650637f76047a0464f257cd0c2c4ee140a5f70462a47",
+    "bytes": 3487,
+    "parts": [
+      "binary_payload/previews__state_offline_waiting.png.b64"
+    ]
+  },
+  {
+    "dest": "previews/state_speaking.png",
+    "sha256": "07f8be7eac97098f996608002f1c208745ca493196d53cffa80e2fa9941e8fb7",
+    "bytes": 3756,
+    "parts": [
+      "binary_payload/previews__state_speaking.png.b64"
+    ]
+  },
+  {
+    "dest": "previews/state_thinking.png",
+    "sha256": "287f7b866219ab56c90a5d77d0843917331667dba07f04871744117f83ae4538",
+    "bytes": 2894,
+    "parts": [
+      "binary_payload/previews__state_thinking.png.b64"
+    ]
+  },
+  {
+    "dest": "previews/thad_sphere_preview.png",
+    "sha256": "fc786a9d1d9f631420d196badfac0d59a48f7f94ece022d0952aa13c2ac734e1",
+    "bytes": 53770,
+    "parts": [
+      "binary_payload/previews__thad_sphere_preview.png.b64"
+    ]
+  }
+]

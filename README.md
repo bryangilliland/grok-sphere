@@ -8,6 +8,18 @@ Personal-use firmware and Windows companion app for your **Waveshare ESP32-S3-To
 
 ---
 
+## 0. After you clone this repo
+
+Firmware `.bin` files and preview PNGs are stored as text payloads in `binary_payload/` so they fit GitHub's file API (the two firmware images are over 1 MB). After cloning, restore them once before flashing:
+
+```bat
+python restore_binaries.py
+```
+
+Or on Windows, double-click `restore_binaries.bat`. This writes the real files under `flasher\` and `previews\` and checks their SHA-256.
+
+---
+
 ## 1. Fix Windows Not Seeing the Sphere Over USB
 
 Before flashing for the first time, Windows needs to see the sphere's COM port once. (Firmware 1.0 cannot turn off USB—the ESP32-S3's USB-Serial-JTAG controller and ROM bootloader live in hardware.)
