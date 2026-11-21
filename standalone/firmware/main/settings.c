@@ -20,6 +20,8 @@ esp_err_t settings_load(sphere_settings_t *s)
     s->volume = 70;
     s->model = MODEL_HAIKU;
     strcpy(s->voice, AU_DEFAULT_VOICE);
+    s->wake_enabled = true;
+    strcpy(s->wake_word, AU_DEFAULT_WAKE);
     nvs_handle_t h;
     if (nvs_open(NS, NVS_READONLY, &h) != ESP_OK) return ESP_OK;   /* first boot */
     get_str(h, "ssid", s->ssid, sizeof(s->ssid));
@@ -33,6 +35,10 @@ esp_err_t settings_load(sphere_settings_t *s)
     if (nvs_get_u8(h, "model", &u8) == ESP_OK && u8 <= MODEL_SONNET) s->model = u8;
     if (nvs_get_u8(h, "mirror", &u8) == ESP_OK) s->mirror_x = u8 != 0;
     if (nvs_get_u8(h, "volume", &u8) == ESP_OK && u8 <= 100) s->volume = u8;
+    if (nvs_get_u8(h, "wake_on", &u8) == ESP_OK) s->wake_enabled = u8 != 0;
+    char w[28];
+    get_str(h, "wake_word", w, sizeof(w));
+    if (au_wake_valid(w)) strcpy(s->wake_word, w);
     nvs_close(h);
     return ESP_OK;
 }
@@ -50,6 +56,8 @@ esp_err_t settings_save(const sphere_settings_t *s)
     err |= nvs_set_u8(h, "model", s->model);
     err |= nvs_set_u8(h, "mirror", s->mirror_x ? 1 : 0);
     err |= nvs_set_u8(h, "volume", s->volume);
+    err |= nvs_set_u8(h, "wake_on", s->wake_enabled ? 1 : 0);
+    err |= nvs_set_str(h, "wake_word", s->wake_word[0] ? s->wake_word : AU_DEFAULT_WAKE);
     err |= nvs_commit(h);
     nvs_close(h);
     return err;

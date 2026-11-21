@@ -11,6 +11,7 @@
 #define AU_MODEL_SONNET    "claude-sonnet-5-5"
 #define AU_DEFAULT_VOICE   "aura-2-orion-en"
 #define AU_PREVIEW_TEXT    "Hi, I'm Thad. This is how I sound."
+#define AU_DEFAULT_WAKE    "wn9_hiesp"
 #define AU_ANTHROPIC_VERSION "2026-10-21"
 
 typedef struct { const char *id; const char *label; } au_voice_t;
@@ -19,6 +20,12 @@ extern const int AU_VOICE_COUNT;
 
 const char *au_model_id(int model);            /* 0 = Haiku, 1 = Sonnet; anything else = Haiku */
 bool au_voice_valid(const char *id);
+
+typedef struct { const char *id; const char *label; } au_wake_t;
+extern const au_wake_t AU_WAKES[];
+extern const int AU_WAKE_COUNT;
+bool au_wake_valid(const char *id);
+const char *au_wake_label(const char *id);
 
 /* "****abcd" (last 4 chars only). Empty key -> "". Never returns more of the key. */
 void au_mask_key(const char *key, char *out, size_t cap);
@@ -57,7 +64,7 @@ void au_speech_clean(const char *in, char *out, size_t cap, size_t max_chars);
 int au_system_prompt(char *out, size_t cap, const char *local_time);
 
 /* -------- simple energy voice-activity detector for push-to-talk auto-stop -------- */
-typedef enum { VAD_WAITING = 0, VAD_SPEECH, VAD_DONE, VAD_NO_SPEECH, VAD_MAX_LEN } vad_result_t;
+typedef enum { AU_VAD_WAITING = 0, AU_VAD_SPEECH, AU_VAD_DONE, AU_VAD_NO_SPEECH, AU_VAD_MAX_LEN } vad_result_t;
 typedef struct {
     int frame_ms;
     int elapsed_ms, speech_ms, silence_ms;
@@ -66,6 +73,6 @@ typedef struct {
 } au_vad_t;
 void au_vad_init(au_vad_t *v, int frame_ms);
 uint32_t au_rms(const int16_t *pcm, size_t n);
-/* Feed one frame's RMS. Thresholds: no speech within 7 s -> VAD_NO_SPEECH,
- * 1.1 s of silence after >= 0.35 s of speech -> VAD_DONE, 15 s total -> VAD_MAX_LEN. */
+/* Feed one frame's RMS. Thresholds: no speech within 7 s -> AU_VAD_NO_SPEECH,
+ * 1.1 s of silence after >= 0.35 s of speech -> AU_VAD_DONE, 15 s total -> AU_VAD_MAX_LEN. */
 vad_result_t au_vad_feed(au_vad_t *v, uint32_t rms);

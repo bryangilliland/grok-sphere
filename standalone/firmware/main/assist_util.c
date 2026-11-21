@@ -36,6 +36,30 @@ bool au_voice_valid(const char *id)
     return false;
 }
 
+/* Prebuilt English WakeNet9 models bundled from espressif/esp-sr 2.6.2 (packed into srmodels.bin). */
+const au_wake_t AU_WAKES[] = {
+    { "wn9_hiesp",        "Hi, ESP (default)" },
+    { "wn9_alexa",        "Alexa" },
+    { "wn9_jarvis_tts",   "Jarvis" },
+    { "wn9_computer_tts", "Computer" },
+};
+const int AU_WAKE_COUNT = sizeof(AU_WAKES) / sizeof(AU_WAKES[0]);
+
+bool au_wake_valid(const char *id)
+{
+    if (!id) return false;
+    for (int i = 0; i < AU_WAKE_COUNT; i++) if (strcmp(id, AU_WAKES[i].id) == 0) return true;
+    return false;
+}
+
+const char *au_wake_label(const char *id)
+{
+    if (id) {
+        for (int i = 0; i < AU_WAKE_COUNT; i++) if (strcmp(id, AU_WAKES[i].id) == 0) return AU_WAKES[i].label;
+    }
+    return AU_WAKES[0].label;
+}
+
 void au_mask_key(const char *key, char *out, size_t cap)
 {
     if (!out || cap == 0) return;
@@ -278,7 +302,7 @@ int au_system_prompt(char *out, size_t cap, const char *local_time)
 }
 
 /* ----------------------------------------------------------------- VAD */
-#define VAD_NO_SPEECH_MS 7000
+#define AU_VAD_NO_SPEECH_MS 7000
 #define VAD_SILENCE_MS   1100
 #define VAD_MIN_SPEECH_MS 350
 #define VAD_MAX_MS       15000
@@ -319,8 +343,8 @@ vad_result_t au_vad_feed(au_vad_t *v, uint32_t rms)
         v->silence_ms += v->frame_ms;
         if (!v->started) v->speech_ms = 0;
     }
-    if (v->elapsed_ms >= VAD_MAX_MS) return VAD_MAX_LEN;
-    if (v->started && v->silence_ms >= VAD_SILENCE_MS) return VAD_DONE;
-    if (!v->started && v->elapsed_ms >= VAD_NO_SPEECH_MS) return VAD_NO_SPEECH;
-    return v->started ? VAD_SPEECH : VAD_WAITING;
+    if (v->elapsed_ms >= VAD_MAX_MS) return AU_VAD_MAX_LEN;
+    if (v->started && v->silence_ms >= VAD_SILENCE_MS) return AU_VAD_DONE;
+    if (!v->started && v->elapsed_ms >= AU_VAD_NO_SPEECH_MS) return AU_VAD_NO_SPEECH;
+    return v->started ? AU_VAD_SPEECH : AU_VAD_WAITING;
 }
