@@ -41,7 +41,7 @@ static esp_netif_t *s_sta_netif, *s_ap_netif;
 static httpd_handle_t s_httpd;
 static volatile bool s_portal, s_dns_run, s_mdns;
 static char s_ap_ssid[24], s_ap_pass[12], s_ip[16];
-static wifi_ap_record_t s_scan[MAX_SCAN];
+static EXT_RAM_BSS_ATTR wifi_ap_record_t s_scan[MAX_SCAN];
 static uint16_t s_scan_n;
 static volatile bool s_sta_wanted;
 static esp_timer_handle_t s_retry_timer;
@@ -173,8 +173,8 @@ static esp_err_t send_page(httpd_req_t *req, const char *notice)
     int nscan = 0;
     for (int i = 0; i < s_scan_n && i < MAX_SCAN; i++) scans[nscan++] = (const char *)s_scan[i].ssid;
 
-    assistant_diag_t *diag = calloc(1, sizeof(assistant_diag_t));
-    char *page = malloc(PAGE_MAX);
+    assistant_diag_t *diag = heap_caps_calloc(1, sizeof(assistant_diag_t), MALLOC_CAP_SPIRAM);
+    char *page = heap_caps_malloc(PAGE_MAX, MALLOC_CAP_SPIRAM);
     if (!diag || !page) { free(diag); free(page); return ESP_ERR_NO_MEM; }
     assistant_diag(diag);
     setup_page_info_t info = {
@@ -184,8 +184,11 @@ static esp_err_t send_page(httpd_req_t *req, const char *notice)
         .chime_enabled = s.chime_enabled, .scan_ssids = scans, .scan_n = nscan,
         .last_q = diag->last_q, .last_a = diag->last_a, .notice = notice,
         .diag_err = diag->last_err, .diag_mic_peak = diag->mic_peak, .diag_mic_rms = diag->mic_rms,
+        .diag_noise_floor = diag->noise_floor, .diag_speech_detected = diag->speech_detected,
+        .diag_rec_ms = diag->rec_ms,
         .diag_rssi = net_wifi_rssi(), .diag_free_heap = (unsigned)esp_get_free_heap_size(),
         .diag_free_int = (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+        .diag_min_free_int = (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
         .diag_wake = diag->wake_active,
     };
     int n = net_setup_page_build(page, PAGE_MAX, &info);
@@ -218,7 +221,7 @@ static void flash_task(void *arg) { (void)arg; vTaskDelay(pdMS_TO_TICKS(600)); s
 
 static esp_err_t h_save(httpd_req_t *req)
 {
-    char *body = calloc(1, BODY_MAX);
+    char *body = heap_caps_calloc(1, BODY_MAX, MALLOC_CAP_SPIRAM);
     if (!body) return ESP_ERR_NO_MEM;
     if (read_body(req, body, BODY_MAX) < 0) { free(body); return ESP_FAIL; }
 
@@ -287,7 +290,7 @@ static esp_err_t h_save(httpd_req_t *req)
 
 static esp_err_t h_preview(httpd_req_t *req)
 {
-    char *body = calloc(1, BODY_MAX);
+    char *body = heap_caps_calloc(1, BODY_MAX, MALLOC_CAP_SPIRAM);
     char voice[40] = "";
     if (!body) return ESP_ERR_NO_MEM;
     if (read_body(req, body, BODY_MAX) >= 0)
@@ -331,7 +334,7 @@ static esp_err_t h_moods(httpd_req_t *req)
 
 static esp_err_t h_ask(httpd_req_t *req)
 {
-    char *body = calloc(1, BODY_MAX);
+    char *body = heap_caps_calloc(1, BODY_MAX, MALLOC_CAP_SPIRAM);
     char *q = calloc(1, 520);
     if (!body || !q) { free(body); free(q); return ESP_ERR_NO_MEM; }
     if (read_body(req, body, BODY_MAX) >= 0 && net_form_get(body, "q", q, 520)) {

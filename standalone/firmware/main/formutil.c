@@ -181,8 +181,8 @@ int net_setup_page_build(char *out, size_t cap, const setup_page_info_t *in)
                  strcmp(cur_wake, AU_WAKES[i].id) == 0 ? " selected" : "", AU_WAKES[i].label);
         A(line);
     }
-    A("</select><small>Say the wake word to start talking without tapping (runs offline on the sphere). "
-      "\"Hi, ESP\" and \"Alexa\" are trained on real voices; \"Jarvis\" and \"Computer\" are synthetic.</small>");
+    A("</select><small>Say the exact wake word to start talking without tapping (runs offline on the sphere). "
+      "For Jarvis, say \"Jarvis\" (not \"Hey Jarvis\"). \"Hi, ESP\" and \"Alexa\" are trained on real voices; \"Jarvis\" and \"Computer\" are synthetic.</small>");
     A(in->chime_enabled
       ? "<label class=cb><input type=checkbox name=chime value=1 checked>Chime when listening starts</label>"
       : "<label class=cb><input type=checkbox name=chime value=1>Chime when listening starts</label>");
@@ -211,6 +211,12 @@ int net_setup_page_build(char *out, size_t cap, const setup_page_info_t *in)
     snprintf(line, sizeof(line), "<small>Last mic level</small>peak %u / rms %u",
              in->diag_mic_peak, in->diag_mic_rms);
     A(line);
+    snprintf(line, sizeof(line), "<small>Noise floor</small>%u", in->diag_noise_floor);
+    A(line);
+    snprintf(line, sizeof(line), "<small>Speech detected</small>%s", in->diag_speech_detected ? "yes" : "no");
+    A(line);
+    snprintf(line, sizeof(line), "<small>Recorded seconds</small>%.1f s", (double)in->diag_rec_ms / 1000.0);
+    A(line);
     A("<small>Last transcript</small>");
     E((in->last_q && in->last_q[0]) ? in->last_q : "(none yet)");
     A("<small>Last Claude reply</small>");
@@ -224,8 +230,8 @@ int net_setup_page_build(char *out, size_t cap, const setup_page_info_t *in)
     if (in->diag_rssi < 0) snprintf(line, sizeof(line), "<small>Wi-Fi RSSI</small>%d dBm", in->diag_rssi);
     else snprintf(line, sizeof(line), "<small>Wi-Fi RSSI</small>%s", in->wifi_connected ? "connected" : "not connected");
     A(line);
-    snprintf(line, sizeof(line), "<small>Free heap</small>%u KB (internal %u KB)",
-             in->diag_free_heap / 1024, in->diag_free_int / 1024);
+    snprintf(line, sizeof(line), "<small>Free heap</small>%u KB (internal %u KB, min %u KB)",
+             in->diag_free_heap / 1024, in->diag_free_int / 1024, in->diag_min_free_int / 1024);
     A(line);
     A("</div>");
 

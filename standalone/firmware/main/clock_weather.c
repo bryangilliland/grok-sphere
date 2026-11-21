@@ -11,6 +11,7 @@
 #include <time.h>
 #include "cJSON.h"
 #include "esp_crt_bundle.h"
+#include "esp_heap_caps.h"
 #include "esp_http_client.h"
 #include "esp_log.h"
 #include "esp_netif_sntp.h"
@@ -30,7 +31,7 @@ static const char *TAG = "weather";
 
 static bool fetch_weather(void)
 {
-    char *body = calloc(1, BODY_MAX);
+    char *body = heap_caps_calloc(1, BODY_MAX, MALLOC_CAP_SPIRAM);
     if (!body) return false;
     esp_http_client_config_t cfg = {
         .url = WEATHER_URL,
@@ -87,5 +88,8 @@ void clock_weather_start(void)
     tzset();
     esp_sntp_config_t cfg = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
     esp_netif_sntp_init(&cfg);
-    xTaskCreate(weather_task, "weather", 8192, NULL, 3, NULL);
+    if (xTaskCreatePinnedToCoreWithCaps(weather_task, "weather", 8192, NULL, 3, NULL, tskNO_AFFINITY,
+                                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
+        xTaskCreate(weather_task, "weather", 8192, NULL, 3, NULL);
+    }
 }

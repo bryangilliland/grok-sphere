@@ -31,9 +31,13 @@ typedef struct {
     const char *diag_err;
     unsigned int diag_mic_peak;
     unsigned int diag_mic_rms;
+    unsigned int diag_noise_floor;
+    bool diag_speech_detected;
+    unsigned int diag_rec_ms;
     int diag_rssi;               /* 0 if disconnected */
     unsigned int diag_free_heap;
     unsigned int diag_free_int;
+    unsigned int diag_min_free_int;
     const char *diag_wake;
 } setup_page_info_t;
 
