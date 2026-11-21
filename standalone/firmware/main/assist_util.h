@@ -61,7 +61,19 @@ char *au_tts_body(const char *text);
 void au_speech_clean(const char *in, char *out, size_t cap, size_t max_chars);
 
 /* Build the Thad system prompt (date/time string may be empty). */
+typedef enum {
+    AU_MOOD_NONE = 0,
+    AU_MOOD_HAPPY,
+    AU_MOOD_SAD,
+    AU_MOOD_BORED,
+    AU_MOOD_SLEEPY,
+    AU_MOOD_SURPRISED,
+    AU_MOOD_CURIOUS,
+} au_mood_t;
+
 int au_system_prompt(char *out, size_t cap, const char *local_time);
+/* Strip an optional leading "[mood:...]" tag in place and return the parsed mood. */
+au_mood_t au_extract_mood(char *text);
 
 /* -------- simple energy voice-activity detector for push-to-talk auto-stop -------- */
 typedef enum { AU_VAD_WAITING = 0, AU_VAD_SPEECH, AU_VAD_DONE, AU_VAD_NO_SPEECH, AU_VAD_MAX_LEN } vad_result_t;
@@ -73,6 +85,8 @@ typedef struct {
 } au_vad_t;
 void au_vad_init(au_vad_t *v, int frame_ms);
 uint32_t au_rms(const int16_t *pcm, size_t n);
-/* Feed one frame's RMS. Thresholds: no speech within 7 s -> AU_VAD_NO_SPEECH,
- * 1.1 s of silence after >= 0.35 s of speech -> AU_VAD_DONE, 15 s total -> AU_VAD_MAX_LEN. */
+/* DC-removed RMS (strips codec/mic DC offset) and optional AC peak amplitude. */
+uint32_t au_rms_ac(const int16_t *pcm, size_t n, uint16_t *peak_out);
+/* Feed one frame's RMS. Thresholds: no speech within 5 s -> AU_VAD_NO_SPEECH,
+ * 0.9 s silence after >= 0.22 s speech (min 0.6 s total) -> AU_VAD_DONE, 8 s cap -> AU_VAD_MAX_LEN. */
 vad_result_t au_vad_feed(au_vad_t *v, uint32_t rms);

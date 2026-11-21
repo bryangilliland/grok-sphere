@@ -19,6 +19,7 @@ typedef struct {
     uint8_t volume;                        /* 0..100 */
     bool wake_enabled;                     /* on-device ESP-SR wake word (default true) */
     char wake_word[28];                    /* WakeNet9 model id (default AU_DEFAULT_WAKE) */
+    bool chime_enabled;                    /* play chime when listening starts (default false) */
 } sphere_settings_t;
 
 esp_err_t settings_load(sphere_settings_t *s);   /* fills defaults when nothing is saved */
