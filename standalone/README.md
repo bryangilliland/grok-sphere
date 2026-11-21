@@ -1,4 +1,4 @@
-# Grok Sphere: standalone Thad (firmware 2.3.3-standalone)
+# Grok Sphere: standalone Thad (firmware 2.3.4-standalone)
 
 The sphere talks to Claude on its own over Wi-Fi, with offline wake-word detection on the ESP32-S3. The laptop is only used to flash in Edge.
 Hardware: Waveshare ESP32-S3-Touch-LCD-1.85C-BOX (16 MB flash, 8 MB PSRAM).
@@ -10,7 +10,10 @@ Hardware: Waveshare ESP32-S3-Touch-LCD-1.85C-BOX (16 MB flash, 8 MB PSRAM).
 
 See `SETUP_GUIDE.txt` for the 6-step phone setup.
 
-## What's new in 2.3.3-standalone
+## What's new in 2.3.4-standalone
+- **Claude web search:** Anthropic's server-side `web_search_20250305` tool (`max_uses`: 2, no beta header) lets Thad look up news, scores, prices, and hours. Localized to the setup-page location (default Fort Worth, Texas, US / America/Chicago). Uses the sphere's live weather and time first, and does not read URLs aloud. Toggle **Web search** on the setup page (default on; about $10 per 1,000 searches on the Claude account). If the account has not enabled the tool, the sphere retries once without it and shows `Web search not enabled on your Claude account` in Diagnostics, along with **Last web searches**.
+
+## Prior 2.3.3-standalone
 - **Glitch-free PSRAM-buffered TTS:** downloads each spoken sentence completely into PSRAM (`16 KB` TLS RX buffer, `WIFI_PS_NONE` while speaking, `EAGAIN` retry handling) before playback starts, then pipelines sentence N+1 while sentence N plays from a `2 MB` (~64 s) PSRAM stream buffer and `8 x 480`-frame I2S DMA cushion. Playback timeout scales dynamically with audio length (up to 95 s) instead of cutting off early.
 - **Live weather & date/time context for Claude:** caches Open-Meteo current conditions + today's high/low/rain chance (10-min refresh) and SNTP local date/time in Claude's system prompt, with a configurable **Weather location** field (city or `lat, lon`, default `Fort Worth, TX`) on the setup page.
 - **Snappier tap-to-stop:** lowered touchscreen tap duration threshold (`15 ms`) so quick taps/double-taps register reliably.
@@ -54,5 +57,5 @@ See `SETUP_GUIDE.txt` for the 6-step phone setup.
 ## Layout
 - `bin/`: merged bin (`0x0`) and app-only update bin (`0x10000`).
 - `firmware/`: ESP-IDF 5.4.2 project (`idf.py build && idf.py merge-bin -o grok_sphere_standalone.bin`). `pack_wake_models.py` packs the 4 WakeNet9 models from `espressif/esp-sr` at build time so `partitions.csv` stays unchanged.
-- `firmware/host_test/run_host_tests.sh`: 551 host checks (wake catalog, voice catalog, mood tag parser, form parsing, setup page + diagnostics with key never echoed, Claude/Deepgram JSON, speech cleanup, WAV, DC-removed AC RMS & VAD).
+- `firmware/host_test/run_host_tests.sh`: 577 host checks (wake catalog, voice catalog, mood tag parser, form parsing, setup page + diagnostics with key never echoed, Claude/Deepgram JSON, speech cleanup, WAV, DC-removed AC RMS & VAD).
 - `previews/`: screen states, emotional capsule-eye moods sheet, and phone setup page screenshots.

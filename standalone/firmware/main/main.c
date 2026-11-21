@@ -29,7 +29,7 @@
 #include "touch.h"
 #include "ui.h"
 
-#define FW_VERSION "2.3.3-standalone"
+#define FW_VERSION "2.3.4-standalone"
 
 static const char *TAG = "main";
 static sphere_settings_t s_settings;
