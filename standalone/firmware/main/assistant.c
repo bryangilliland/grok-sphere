@@ -26,9 +26,15 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/semphr.h"
+#include "freertos/event_groups.h"
 #include "freertos/task.h"
+#include "esp_afe_sr_iface.h"
+#include "esp_afe_sr_models.h"
+#include "model_path.h"
 #include "net.h"
 #include "ui.h"
+
+extern const uint8_t srmodels_bin_start[] asm("_binary_srmodels_bin_start");
 
 #define TAG "thad"
 #define FRAME_SAMPLES   512                          /* 32 ms */
@@ -41,12 +47,21 @@
 #define ANTHROPIC_URL   "https://api.anthropic.com/v1/messages"
 #define DG_LISTEN_URL   "https://api.deepgram.com/v1/listen?model=nova-3&smart_format=true&language=en"
 
-typedef enum { EV_TAP, EV_TEXT, EV_PREVIEW } ev_type_t;
+typedef enum { EV_TAP, EV_WAKE, EV_TEXT, EV_PREVIEW } ev_type_t;
 typedef struct { ev_type_t type; char *text; } ev_t;
 
+#define BIT_FETCH_GO     BIT0
+#define BIT_FETCH_PARKED BIT1
+
 static QueueHandle_t s_q;
-static SemaphoreHandle_t s_lock;
+static SemaphoreHandle_t s_lock, s_mic_lock;
+static EventGroupHandle_t s_wake_ev;
 static volatile bool s_busy, s_listening, s_stop_rec, s_speaking, s_hush;
+static volatile bool s_wake_paused, s_wake_reconfig, s_afe_active;
+static srmodel_list_t *s_models;
+static const esp_afe_sr_iface_t *s_afe;
+static esp_afe_sr_data_t *s_afe_data;
+static char s_active_word[28];
 static char s_last_q[520], s_last_a[REPLY_MAX];
 static char *s_hist_text[HIST_TURNS];
 static const char *s_hist_role[HIST_TURNS];
@@ -92,28 +107,33 @@ static void hist_add(const char *role, const char *text)
     if (s_hist_text[s_hist_n]) s_hist_n++;
 }
 
+void assistant_wake_reconfig(void) { s_wake_reconfig = true; }
+
 void assistant_tap(void)
 {
     if (s_listening) { s_stop_rec = true; return; }
     if (s_speaking) { s_hush = true; audio_stop(); return; }
     if (s_busy) return;
+    s_wake_paused = true;
     ev_t e = { .type = EV_TAP };
-    xQueueSend(s_q, &e, 0);
+    if (xQueueSend(s_q, &e, 0) != pdTRUE) s_wake_paused = false;
 }
 
 void assistant_ask_text(const char *q)
 {
     if (s_busy) return;
+    s_wake_paused = true;
     ev_t e = { .type = EV_TEXT, .text = strdup(q) };
-    if (!e.text || xQueueSend(s_q, &e, 0) != pdTRUE) free(e.text);
+    if (!e.text || xQueueSend(s_q, &e, 0) != pdTRUE) { free(e.text); s_wake_paused = false; }
     else set_last(q, "");
 }
 
 void assistant_preview(const char *voice)
 {
     if (s_busy) return;
+    s_wake_paused = true;
     ev_t e = { .type = EV_PREVIEW, .text = strdup(voice ? voice : "") };
-    if (!e.text || xQueueSend(s_q, &e, 0) != pdTRUE) free(e.text);
+    if (!e.text || xQueueSend(s_q, &e, 0) != pdTRUE) { free(e.text); s_wake_paused = false; }
 }
 
 /* ---------------------------------------------------------------- HTTP helper */
@@ -200,7 +220,7 @@ static size_t record(int16_t *buf)
 {
     s_stop_rec = false;
     s_listening = true;
-    audio_stop();
+    if (audio_is_playing()) { audio_stop(); vTaskDelay(pdMS_TO_TICKS(60)); }
     ui_set_reply(NULL);
     ui_set_state(UI_STATE_LISTENING, "", "Listening...");
     audio_play_chime();
@@ -216,10 +236,10 @@ static size_t record(int16_t *buf)
         memcpy(buf + n, frame, got * sizeof(int16_t));
         n += got;
         vad_result_t v = au_vad_feed(&vad, au_rms(frame, got));
-        if (v == VAD_SPEECH) heard = true;
+        if (v == AU_VAD_SPEECH) heard = true;
         if (s_stop_rec) { heard = heard || vad.speech_ms > 200; break; }
-        if (v == VAD_DONE || v == VAD_MAX_LEN) { heard = true; break; }
-        if (v == VAD_NO_SPEECH) break;
+        if (v == AU_VAD_DONE || v == AU_VAD_MAX_LEN) { heard = true; break; }
+        if (v == AU_VAD_NO_SPEECH) break;
     }
     s_listening = false;
     return heard ? n : 0;
@@ -390,14 +410,16 @@ static void handle(const ev_t *e, int16_t *rec)
     }
     bool voice = s.speech_key[0] != 0;
 
-    if (e->type == EV_TAP) {
+    if (e->type == EV_TAP || e->type == EV_WAKE) {
         if (!voice) {
             char msg[120];
             snprintf(msg, sizeof(msg), "Voice needs a Deepgram key. Or type at http://%s", net_ip_str());
             fail(msg);
             goto done;
         }
+        xSemaphoreTake(s_mic_lock, portMAX_DELAY);
         size_t n = record(rec);
+        xSemaphoreGive(s_mic_lock);
         if (n == 0) { ui_set_state(UI_STATE_IDLE, "", ""); goto done; }
         ui_set_state(UI_STATE_THINKING, "", "");
         if (!speech_to_text(s.speech_key, rec, n, question, 520)) goto done;
@@ -443,18 +465,157 @@ static void task(void *arg)
     for (;;) {
         ev_t e;
         if (xQueueReceive(s_q, &e, portMAX_DELAY) != pdTRUE) continue;
-        if (!rec) { fail("Out of memory"); free(e.text); continue; }
+        if (!rec) { fail("Out of memory"); free(e.text); s_wake_paused = false; continue; }
         s_busy = true;
+        s_wake_paused = true;
         s_hush = false;
         handle(&e, rec);
         free(e.text);
+        /* short pause so speaker tail fades before WakeNet resumes */
+        vTaskDelay(pdMS_TO_TICKS(200));
         s_busy = false;
+        s_wake_paused = false;
+    }
+}
+
+static bool wake_should_run(char *word_out, size_t cap)
+{
+    if (!s_models || net_portal_running() || !net_is_connected()) return false;
+    sphere_settings_t s;
+    app_settings_get(&s);
+    bool on = s.wake_enabled && s.api_key[0] != 0;
+    if (on) snprintf(word_out, cap, "%s", au_wake_valid(s.wake_word) ? s.wake_word : AU_DEFAULT_WAKE);
+    memset(&s, 0, sizeof(s));
+    return on;
+}
+
+static void wake_fetch_task(void *arg)
+{
+    (void)arg;
+    for (;;) {
+        xEventGroupWaitBits(s_wake_ev, BIT_FETCH_GO, pdFALSE, pdTRUE, portMAX_DELAY);
+        while (s_afe_active && s_afe_data) {
+            afe_fetch_result_t *res = s_afe->fetch_with_delay(s_afe_data, pdMS_TO_TICKS(100));
+            if (!s_afe_active) break;
+            if (res && res->ret_value != ESP_FAIL && res->wakeup_state == WAKENET_DETECTED) {
+                if (!s_wake_paused && !s_busy && !net_portal_running()) {
+                    ESP_LOGI(TAG, "wake word '%s' detected", s_active_word);
+                    s_wake_paused = true;
+                    ev_t e = { .type = EV_WAKE };
+                    if (xQueueSend(s_q, &e, 0) != pdTRUE) s_wake_paused = false;
+                }
+            }
+        }
+        xEventGroupClearBits(s_wake_ev, BIT_FETCH_GO);
+        xEventGroupSetBits(s_wake_ev, BIT_FETCH_PARKED);
+    }
+}
+
+static void wake_feed_task(void *arg)
+{
+    (void)arg;
+    int16_t *buf = NULL;
+    int buf_samples = 0;
+    bool was_paused = false;
+    int64_t next_check_ms = 0;
+
+    for (;;) {
+        int64_t now = now_ms();
+        if (s_wake_reconfig || now >= next_check_ms) {
+            s_wake_reconfig = false;
+            next_check_ms = now + 1000;
+            char want_word[28] = "";
+            bool want = wake_should_run(want_word, sizeof(want_word));
+            if (s_afe_data && (!want || strcmp(want_word, s_active_word) != 0)) {
+                s_afe_active = false;
+                xEventGroupWaitBits(s_wake_ev, BIT_FETCH_PARKED, pdFALSE, pdTRUE, pdMS_TO_TICKS(500));
+                s_afe->destroy(s_afe_data);
+                s_afe_data = NULL;
+                s_afe = NULL;
+                s_active_word[0] = 0;
+                ESP_LOGI(TAG, "wake word stopped");
+            }
+            if (want && !s_afe_data && !s_wake_paused) {
+                afe_config_t *cfg = afe_config_init("M", s_models, AFE_TYPE_SR, AFE_MODE_LOW_COST);
+                if (cfg) {
+                    cfg->aec_init = false;
+                    cfg->se_init = false;
+                    cfg->ns_init = true;
+                    cfg->afe_ns_mode = AFE_NS_MODE_WEBRTC;
+                    cfg->vad_init = false;
+                    cfg->agc_init = true;
+                    cfg->agc_mode = AFE_AGC_MODE_WAKENET;
+                    cfg->wakenet_init = true;
+                    cfg->wakenet_model_name = want_word;
+                    cfg->wakenet_model_name_2 = NULL;
+                    cfg->wakenet_mode = DET_MODE_90;
+                    cfg->memory_alloc_mode = AFE_MEMORY_ALLOC_MORE_PSRAM;
+                    cfg->afe_perferred_core = 1;
+                    cfg->afe_perferred_priority = 4;
+                    s_afe = esp_afe_handle_from_config(cfg);
+                    s_afe_data = s_afe ? s_afe->create_from_config(cfg) : NULL;
+                    afe_config_free(cfg);
+                }
+                if (s_afe_data) {
+                    int chunk = s_afe->get_feed_chunksize(s_afe_data);
+                    if (chunk > buf_samples) {
+                        free(buf);
+                        buf = malloc((size_t)chunk * sizeof(int16_t));
+                        buf_samples = buf ? chunk : 0;
+                    }
+                    if (buf) {
+                        strcpy(s_active_word, want_word);
+                        xEventGroupClearBits(s_wake_ev, BIT_FETCH_PARKED);
+                        s_afe_active = true;
+                        xEventGroupSetBits(s_wake_ev, BIT_FETCH_GO);
+                        was_paused = true;   /* drain residual DMA on first frame */
+                        ESP_LOGI(TAG, "wake word '%s' active (chunk=%d)", s_active_word, chunk);
+                    } else {
+                        s_afe->destroy(s_afe_data);
+                        s_afe_data = NULL;
+                    }
+                } else {
+                    ESP_LOGE(TAG, "failed to start WakeNet '%s'", want_word);
+                }
+            }
+        }
+
+        if (!s_afe_active || !s_afe_data || s_wake_paused) {
+            if (s_wake_paused) was_paused = true;
+            vTaskDelay(pdMS_TO_TICKS(50));
+            continue;
+        }
+
+        if (was_paused) {
+            xSemaphoreTake(s_mic_lock, portMAX_DELAY);
+            for (int i = 0; i < 4; i++) audio_mic_read(buf, (size_t)buf_samples);
+            xSemaphoreGive(s_mic_lock);
+            s_afe->reset_buffer(s_afe_data);
+            was_paused = false;
+        }
+
+        xSemaphoreTake(s_mic_lock, portMAX_DELAY);
+        size_t got = audio_mic_read(buf, (size_t)buf_samples);
+        xSemaphoreGive(s_mic_lock);
+        if (got == (size_t)buf_samples) {
+            s_afe->feed(s_afe_data, buf);
+        } else {
+            vTaskDelay(pdMS_TO_TICKS(100));
+        }
     }
 }
 
 void assistant_init(void)
 {
     s_lock = xSemaphoreCreateMutex();
+    s_mic_lock = xSemaphoreCreateMutex();
+    s_wake_ev = xEventGroupCreate();
+    xEventGroupSetBits(s_wake_ev, BIT_FETCH_PARKED);
     s_q = xQueueCreate(2, sizeof(ev_t));
+    s_models = srmodel_load(srmodels_bin_start);
+    if (!s_models || s_models->num <= 0) ESP_LOGE(TAG, "WakeNet models failed to load");
+    else ESP_LOGI(TAG, "loaded %d WakeNet models", s_models->num);
     xTaskCreatePinnedToCore(task, "thad", 16384, NULL, 5, NULL, 1);
+    xTaskCreatePinnedToCore(wake_fetch_task, "wake_fetch", 4096, NULL, 4, NULL, 1);
+    xTaskCreatePinnedToCore(wake_feed_task, "wake_feed", 6144, NULL, 3, NULL, 1);
 }

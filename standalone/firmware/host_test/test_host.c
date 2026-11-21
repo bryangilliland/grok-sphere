@@ -56,7 +56,8 @@ static void test_page(void)
     setup_page_info_t in = {
         .ssid = "HomeNet", .wifi_connected = true, .ip = "192.168.1.50",
         .api_key_masked = masked, .speech_key_masked = "", .model = 0, .voice = "aura-2-orion-en",
-        .volume = 70, .scan_ssids = scans, .scan_n = 3,
+        .volume = 70, .wake_enabled = true, .wake_word = "wn9_hiesp",
+        .scan_ssids = scans, .scan_n = 3,
         .last_q = "What's 2+2?", .last_a = "Four.", .notice = "Saved.",
     };
     int n = net_setup_page_build(page, 20480, &in);
@@ -72,12 +73,16 @@ static void test_page(void)
     CHECK(strstr(page, "value=\"aura-2-draco-en\"") && strstr(page, "Draco (warm male, British)"));
     CHECK(strstr(page, "value=\"aura-2-amalthea-en\"") && strstr(page, "Amalthea (cheerful female, Filipino)"));
     CHECK(strstr(page, "formaction=/preview") && strstr(page, "Preview this voice"));
+    CHECK(strstr(page, "name=wakeon value=1 checked"));
+    CHECK(strstr(page, "value=\"wn9_hiesp\" selected>Hi, ESP"));
+    CHECK(strstr(page, "value=\"wn9_alexa\"") && strstr(page, "value=\"wn9_jarvis_tts\"") && strstr(page, "value=\"wn9_computer_tts\""));
     CHECK(strstr(page, "name=dgkey") && strstr(page, "console.deepgram.com"));
     CHECK(strstr(page, "type=password") != NULL);
     /* first boot: no key -> no ask box, Sonnet selected shows */
-    setup_page_info_t first = { .ssid = "", .model = 1, .voice = "aura-2-thalia-en", .volume = 70 };
+    setup_page_info_t first = { .ssid = "", .model = 1, .voice = "aura-2-thalia-en", .volume = 70, .wake_enabled = false, .wake_word = "wn9_jarvis_tts" };
     n = net_setup_page_build(page, 20480, &first);
     CHECK(n > 0 && !strstr(page, "action=/ask") && strstr(page, "sk-ant-...") && strstr(page, "<option value=1 selected>Sonnet"));
+    CHECK(!strstr(page, "name=wakeon value=1 checked") && strstr(page, "value=\"wn9_jarvis_tts\" selected>Jarvis"));
     /* thinking... auto refresh */
     in.last_a = "";
     n = net_setup_page_build(page, 20480, &in);
@@ -115,6 +120,13 @@ static void test_models_voices(void)
             CHECK(strcmp(AU_VOICES[i].id, AU_VOICES[j].id) != 0);
     }
     CHECK(strstr(AU_PREVIEW_TEXT, "Thad") != NULL);
+    /* wake word catalog */
+    CHECK(strcmp(AU_DEFAULT_WAKE, "wn9_hiesp") == 0);
+    CHECK(AU_WAKE_COUNT == 4);
+    CHECK(au_wake_valid("wn9_hiesp") && au_wake_valid("wn9_alexa") && au_wake_valid("wn9_jarvis_tts") && au_wake_valid("wn9_computer_tts"));
+    CHECK(!au_wake_valid("wn9_nope") && !au_wake_valid(NULL));
+    CHECK(strstr(au_wake_label("wn9_hiesp"), "Hi, ESP") != NULL);
+    CHECK(strcmp(au_wake_label("wn9_jarvis_tts"), "Jarvis") == 0);
 }
 
 static void test_claude_request(void)
@@ -226,11 +238,11 @@ static vad_result_t run_vad(const int *pattern, int n, int *frames_used)
 {
     au_vad_t v;
     au_vad_init(&v, 32);
-    vad_result_t r = VAD_WAITING;
+    vad_result_t r = AU_VAD_WAITING;
     for (int i = 0; i < n; i++) {
         r = au_vad_feed(&v, (uint32_t)pattern[i]);
         *frames_used = i + 1;
-        if (r == VAD_DONE || r == VAD_NO_SPEECH || r == VAD_MAX_LEN) break;
+        if (r == AU_VAD_DONE || r == AU_VAD_NO_SPEECH || r == AU_VAD_MAX_LEN) break;
     }
     return r;
 }
@@ -242,19 +254,19 @@ static void test_vad(void)
     CHECK(au_rms(pcm, 4) == 1000 && au_rms(NULL, 0) == 0);
     /* 0.5 s quiet, 2 s speech, then quiet -> DONE about 1.1 s after speech ends */
     for (int i = 0; i < 600; i++) pat[i] = (i >= 16 && i < 78) ? 3000 : 120;
-    CHECK(run_vad(pat, 600, &used) == VAD_DONE && used >= 78 + 33 && used <= 78 + 36);
+    CHECK(run_vad(pat, 600, &used) == AU_VAD_DONE && used >= 78 + 33 && used <= 78 + 36);
     /* only quiet -> NO_SPEECH at 7 s */
     for (int i = 0; i < 600; i++) pat[i] = 150;
-    CHECK(run_vad(pat, 600, &used) == VAD_NO_SPEECH && used * 32 >= 7000 && used * 32 < 7100);
+    CHECK(run_vad(pat, 600, &used) == AU_VAD_NO_SPEECH && used * 32 >= 7000 && used * 32 < 7100);
     /* a short click does not count as speech */
     for (int i = 0; i < 600; i++) pat[i] = (i == 20 || i == 21) ? 5000 : 150;
-    CHECK(run_vad(pat, 600, &used) == VAD_NO_SPEECH);
+    CHECK(run_vad(pat, 600, &used) == AU_VAD_NO_SPEECH);
     /* nonstop talking -> MAX_LEN at 15 s */
     for (int i = 0; i < 600; i++) pat[i] = 4000 + (i % 7) * 100;
-    CHECK(run_vad(pat, 600, &used) == VAD_MAX_LEN && used * 32 >= 15000);
+    CHECK(run_vad(pat, 600, &used) == AU_VAD_MAX_LEN && used * 32 >= 15000);
     /* noisy room: background 900 adapts, speech at 4000 still detected */
     for (int i = 0; i < 600; i++) pat[i] = (i >= 30 && i < 90) ? 4000 : 900 + (i % 3) * 50;
-    CHECK(run_vad(pat, 600, &used) == VAD_DONE);
+    CHECK(run_vad(pat, 600, &used) == AU_VAD_DONE);
 }
 
 static void test_protocol_states(void)
