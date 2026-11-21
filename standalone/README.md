@@ -1,13 +1,11 @@
-# Grok Sphere: standalone Thad (firmware 2.0.0-standalone)
+# Grok Sphere: standalone Thad (firmware 2.1.0-standalone)
 
 The sphere talks to Claude on its own over Wi-Fi. The laptop is only used once, to flash it in Edge.
 Hardware: Waveshare ESP32-S3-Touch-LCD-1.85C-BOX (16 MB flash, 8 MB PSRAM).
 
-## Flash (once)
-- Open https://esptool.spacehuhn.com/ in Edge or Chrome, click Connect, and pick the sphere's USB port.
-- Add `bin/grok_sphere_standalone.bin` at offset **0x0**, then click Program. Unplug it and plug it back in.
-- The merged bin erases saved Wi-Fi, so the setup hotspot shows. That is expected.
-- To update later without losing settings, flash `bin/grok_sphere_standalone_app_0x10000.bin` at **0x10000** instead.
+## Flash (once), or update without losing settings
+- **Already set up? Just updating:** open https://esptool.spacehuhn.com/ in Edge, Connect, pick the sphere, add `bin/grok_sphere_standalone_app_0x10000.bin` at offset **0x10000**, Program. Saved Wi-Fi and keys stay. Unplug and plug it back in.
+- **First flash, or you want to start over:** add `bin/grok_sphere_standalone.bin` at offset **0x0**. That erases saved Wi-Fi, so the setup hotspot will appear.
 - If the port won't connect, hold BOOT while you plug it in.
 
 See `SETUP_GUIDE.txt` for the 6-step phone setup.
@@ -23,6 +21,7 @@ Claude: `POST https://api.anthropic.com/v1/messages` with `x-api-key` and `anthr
 - Default model is `claude-haiku-5-5`. `claude-sonnet-5-5` can be picked on the page.
 - Replies are 1 to 3 short spoken sentences as "Thad".
 
+On the setup page, pick Thad's voice from the list (default is Orion, a calm US male) and tap **Preview this voice** to hear a short sample on the sphere. The choice is saved with your other settings; you do not need to reflash.
 Without a Deepgram key, type (or use phone dictation) in the **Ask Thad** box on the setup page. The answer scrolls under the eyes and also shows on the page.
 
 ## Using it
@@ -39,5 +38,5 @@ Without a Deepgram key, type (or use phone dictation) in the **Ask Thad** box on
 ## Layout
 - `bin/`: the merged bin (0x0) and the app-only bin (0x10000).
 - `firmware/`: ESP-IDF 5.4.2 project. Build it with `idf.py build && idf.py merge-bin -o grok_sphere_standalone.bin`.
-- `firmware/host_test/run_host_tests.sh`: 77 host checks. They cover form parsing, the setup page (key never echoed), Claude and Deepgram JSON, speech text cleanup, WAV, and VAD.
+- `firmware/host_test/run_host_tests.sh`: Host tests (250 checks) cover the voice catalog, form parsing, the setup page (key never echoed, Preview button present), Claude and Deepgram JSON, speech text cleanup, WAV, and VAD.
 - `previews/`: screen states (`standalone_screens_preview.png`) and the phone setup page (`setup_page_first.png`, `setup_page_home.png`).
