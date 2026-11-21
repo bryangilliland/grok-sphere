@@ -1,0 +1,15 @@
+{
+  "name": "Grok Sphere - Thad + Claude Edition",
+  "version": "1.2.0-thad",
+  "new_install_prompt_erase": true,
+  "builds": [
+    {
+      "chipFamily": "ESP32-S3",
+      "parts": [
+        { "path": "parts/bootloader.bin", "offset": 0 },
+        { "path": "parts/partition-table.bin", "offset": 32768 },
+        { "path": "parts/grok_sphere.bin", "offset": 65536 }
+      ]
+    }
+  ]
+}
