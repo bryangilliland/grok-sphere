@@ -57,7 +57,7 @@ static void test_page(void)
         .ssid = "HomeNet", .wifi_connected = true, .ip = "192.168.1.50",
         .api_key_masked = masked, .speech_key_masked = "", .model = 0, .voice = "aura-2-orion-en",
         .volume = 70, .wake_enabled = true, .wake_word = "wn9_hiesp",
-        .chime_enabled = false, .location = "Austin, TX", .scan_ssids = scans, .scan_n = 3,
+        .chime_enabled = false, .web_search_enabled = true, .location = "Austin, TX", .scan_ssids = scans, .scan_n = 3,
         .last_q = "What's 2+2?", .last_a = "Four.", .notice = "Saved.",
         .diag_err = "None", .diag_mic_peak = 3200, .diag_mic_rms = 850,
         .diag_noise_floor = 420, .diag_speech_detected = true, .diag_rec_ms = 2400,
@@ -82,6 +82,7 @@ static void test_page(void)
     CHECK(strstr(page, "value=\"wn9_alexa\"") && strstr(page, "value=\"wn9_jarvis_tts\"") && strstr(page, "value=\"wn9_computer_tts\""));
     CHECK(!strstr(page, "name=chime value=1 checked"));
     CHECK(strstr(page, "name=loc") && strstr(page, "Austin, TX"));
+    CHECK(strstr(page, "name=webon value=1 checked") && strstr(page, "Last web searches"));
     CHECK(strstr(page, "action=/moods") && strstr(page, "Preview moods"));
     CHECK(strstr(page, "Diagnostics") && strstr(page, "peak 3200 / rms 850") && strstr(page, "-56 dBm") && strstr(page, "7200 KB"));
     CHECK(strstr(page, "Noise floor") && strstr(page, "420") && strstr(page, "Speech detected") && strstr(page, "2.4 s") && strstr(page, "min 72 KB"));
@@ -141,7 +142,7 @@ static void test_models_voices(void)
 static void test_claude_request(void)
 {
     au_turn_t hist[] = { { "user", "Hi" }, { "assistant", "Hey Bryan." } };
-    char *r = au_claude_request("claude-haiku-5-5", 600, "You are \"Thad\".", hist, 2, "Line1\nLine \"2\"", 1);
+    char *r = au_claude_request("claude-haiku-5-5", 600, "You are \"Thad\".", hist, 2, "Line1\nLine \"2\"", 1, NULL);
     CHECK(r != NULL);
     cJSON *j = cJSON_Parse(r);
     CHECK(j != NULL);
@@ -158,15 +159,35 @@ static void test_claude_request(void)
     CHECK(strcmp(cJSON_GetObjectItem(last, "content")->valuestring, "Line1\nLine \"2\"") == 0);
     cJSON_Delete(j);
     free(r);
-    r = au_claude_request("claude-sonnet-5-5", 600, "", NULL, 0, "x", 2);
+    r = au_claude_request("claude-sonnet-5-5", 600, "", NULL, 0, "x", 2, NULL);
     j = cJSON_Parse(r);
     CHECK(strcmp(cJSON_GetObjectItem(cJSON_GetObjectItem(j, "thinking"), "type")->valuestring, "between_tools") == 0);
     CHECK(cJSON_GetObjectItem(j, "system") == NULL);
     cJSON_Delete(j);
     free(r);
-    r = au_claude_request("claude-sonnet-5-5", 600, "s", NULL, 0, "x", 0);   /* fallback: plain */
+    r = au_claude_request("claude-sonnet-5-5", 600, "s", NULL, 0, "x", 0, NULL);   /* fallback: plain */
     j = cJSON_Parse(r);
     CHECK(cJSON_GetObjectItem(j, "thinking") == NULL && cJSON_GetObjectItem(j, "output_config") == NULL);
+    cJSON_Delete(j);
+    free(r);
+
+    au_web_search_t web = { .max_uses = 2, .city = "Fort Worth", .region = "Texas",
+                            .country = "US", .timezone = "America/Chicago" };
+    r = au_claude_request("claude-haiku-5-5", 600, "sys", NULL, 0, "What's the news?", 1, &web);
+    j = cJSON_Parse(r);
+    CHECK(j != NULL);
+    cJSON *tools = cJSON_GetObjectItem(j, "tools");
+    CHECK(cJSON_GetArraySize(tools) == 1);
+    cJSON *tool = cJSON_GetArrayItem(tools, 0);
+    CHECK(strcmp(cJSON_GetObjectItem(tool, "type")->valuestring, AU_WEB_SEARCH_TYPE) == 0);
+    CHECK(strcmp(cJSON_GetObjectItem(tool, "name")->valuestring, "web_search") == 0);
+    CHECK(cJSON_GetObjectItem(tool, "max_uses")->valueint == 2);
+    cJSON *loc = cJSON_GetObjectItem(tool, "user_location");
+    CHECK(strcmp(cJSON_GetObjectItem(loc, "type")->valuestring, "approximate") == 0);
+    CHECK(strcmp(cJSON_GetObjectItem(loc, "city")->valuestring, "Fort Worth") == 0);
+    CHECK(strcmp(cJSON_GetObjectItem(loc, "region")->valuestring, "Texas") == 0);
+    CHECK(strcmp(cJSON_GetObjectItem(loc, "country")->valuestring, "US") == 0);
+    CHECK(strcmp(cJSON_GetObjectItem(loc, "timezone")->valuestring, "America/Chicago") == 0);
     cJSON_Delete(j);
     free(r);
 }
@@ -186,6 +207,44 @@ static void test_claude_parse(void)
     CHECK(!au_parse_claude("{\"type\":\"message\",\"content\":[]}", out, sizeof(out), err, sizeof(err)));
     char tiny[8];
     CHECK(au_parse_claude(ok, tiny, sizeof(tiny), err, sizeof(err)) && strlen(tiny) == 7);
+
+    /* web search: skip preamble text and tool blocks; strip citations/URLs; count searches */
+    const char *ws = "{\"id\":\"msg_w\",\"type\":\"message\",\"role\":\"assistant\",\"content\":["
+                     "{\"type\":\"text\",\"text\":\"I'll search for the score.\"},"
+                     "{\"type\":\"server_tool_use\",\"id\":\"srvtoolu_1\",\"name\":\"web_search\","
+                     "\"input\":{\"query\":\"cowboys score\"}},"
+                     "{\"type\":\"web_search_tool_result\",\"tool_use_id\":\"srvtoolu_1\","
+                     "\"content\":[{\"type\":\"web_search_result\",\"url\":\"https://example.com/x\","
+                     "\"title\":\"Score\"}]},"
+                     "{\"type\":\"text\",\"text\":\"The Cowboys won 24-17. [1]\","
+                     "\"citations\":[{\"type\":\"web_search_result_location\","
+                     "\"url\":\"https://example.com/x\",\"title\":\"Score\"}]}],"
+                     "\"usage\":{\"input_tokens\":100,\"output_tokens\":40,"
+                     "\"server_tool_use\":{\"web_search_requests\":1}},\"stop_reason\":\"end_turn\"}";
+    CHECK(au_parse_claude(ws, out, sizeof(out), err, sizeof(err)));
+    CHECK(strcmp(out, "The Cowboys won 24-17.") == 0);
+    CHECK(!strstr(out, "I'll search") && !strstr(out, "http") && !strstr(out, "[1]"));
+    CHECK(au_claude_web_search_count(ws) == 1);
+    CHECK(au_web_search_rejected("Web search is not enabled for this organization"));
+    CHECK(au_web_search_rejected("invalid_request_error: web_search is disabled"));
+    CHECK(!au_web_search_rejected("invalid x-api-key"));
+    CHECK(!au_web_search_rejected("Claude is busy"));
+
+    char buf[64];
+    strcpy(buf, "See the report at https://news.example.com/a and more [2].");
+    au_strip_citations(buf);
+    CHECK(strcmp(buf, "See the report at and more.") == 0);
+    strcpy(buf, "Read [the article](https://example.com) today.");
+    au_strip_citations(buf);
+    CHECK(strcmp(buf, "Read the article today.") == 0);
+
+    char city[48], region[48];
+    au_web_location_from_setting("Austin, TX", city, sizeof(city), region, sizeof(region));
+    CHECK(strcmp(city, "Austin") == 0 && strcmp(region, "TX") == 0);
+    au_web_location_from_setting("32.7555, -97.3308", city, sizeof(city), region, sizeof(region));
+    CHECK(strcmp(city, "Fort Worth") == 0 && strcmp(region, "Texas") == 0);
+    au_web_location_from_setting("", city, sizeof(city), region, sizeof(region));
+    CHECK(strcmp(city, "Fort Worth") == 0 && strcmp(region, "Texas") == 0);
 }
 
 static void test_deepgram(void)
@@ -237,11 +296,13 @@ static void test_prompt(void)
 {
     char p[1800];
     int n = au_system_prompt(p, sizeof(p), "Saturday, November 21, 2026, 4:05 PM",
-                             "Fort Worth, TX: 72 F (feels like 70 F), mostly clear, wind 9 mph; today's high 72 F, low 58 F, rain chance 12%.");
+                             "Fort Worth, TX: 72 F (feels like 70 F), mostly clear, wind 9 mph; today's high 72 F, low 58 F, rain chance 12%.", true);
     CHECK(n > 200 && n < (int)sizeof(p));
     CHECK(strstr(p, "Thad") && strstr(p, "Fort Worth") && strstr(p, "November 21, 2026") && strstr(p, "72 F") && strstr(p, "accurate and current"));
-    au_system_prompt(p, sizeof(p), "", "");
+    CHECK(strstr(p, "web search") && strstr(p, "do not search the web for that"));
+    au_system_prompt(p, sizeof(p), "", "", false);
     CHECK(!strstr(p, "Current local date") && !strstr(p, "Live local weather"));
+    CHECK(strstr(p, "cannot browse the web"));
 
     /* sentence splitter for pipelined TTS */
     const char *starts[6];
