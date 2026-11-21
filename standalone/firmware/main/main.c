@@ -29,7 +29,7 @@
 #include "touch.h"
 #include "ui.h"
 
-#define FW_VERSION "2.1.0-standalone"
+#define FW_VERSION "2.2.0-standalone"
 
 static const char *TAG = "main";
 static sphere_settings_t s_settings;
@@ -52,6 +52,7 @@ void app_settings_apply(const sphere_settings_t *s, bool wifi_changed)
     if (err != ESP_OK) ESP_LOGE(TAG, "settings save failed");
     else ESP_LOGI(TAG, "settings saved (wifi_changed=%d)", wifi_changed);   /* never log keys */
     audio_set_volume(s->volume);
+    assistant_wake_reconfig();
     if (s->api_key[0] && s_key_link_shown && !net_portal_running()) {
         s_key_link_shown = false;
         ui_hide_setup();
@@ -142,6 +143,7 @@ void app_main(void)
             net_http_start();
             net_mdns_start();
             clock_weather_start();
+            assistant_wake_reconfig();
             ui_set_state(UI_STATE_IDLE, "", "");
             if (!have_key() && !net_portal_running()) show_key_link();
         }
@@ -157,6 +159,7 @@ void app_main(void)
             else if (!portal_empty_since) portal_empty_since = now;
             if (portal_empty_since && now - portal_empty_since > 60000 && now - portal_since > 120000) {
                 net_stop_portal();
+                assistant_wake_reconfig();
                 portal_empty_since = 0;
             }
         }
@@ -173,6 +176,7 @@ void app_main(void)
                 ui_hide_notice();
                 s_key_link_shown = false;
                 net_start_portal();
+                assistant_wake_reconfig();
                 portal_since = now;
                 portal_empty_since = 0;
             } else if (boot_ms > 0 && boot_ms < 1500 && !net_portal_running()) {

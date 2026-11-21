@@ -174,7 +174,7 @@ static esp_err_t send_page(httpd_req_t *req, const char *notice)
     setup_page_info_t info = {
         .ssid = s.ssid, .wifi_connected = net_is_connected(), .ip = net_ip_str(),
         .api_key_masked = akm, .speech_key_masked = dkm, .model = s.model, .voice = s.voice,
-        .volume = s.volume, .mirror_x = s.mirror_x, .scan_ssids = scans, .scan_n = nscan,
+        .volume = s.volume, .mirror_x = s.mirror_x, .wake_enabled = s.wake_enabled, .wake_word = s.wake_word, .scan_ssids = scans, .scan_n = nscan,
         .last_q = q, .last_a = a, .notice = notice,
     };
     int n = net_setup_page_build(page, PAGE_MAX, &info);
@@ -233,6 +233,8 @@ static esp_err_t h_save(httpd_req_t *req)
         int v = atoi(tmp);
         s.volume = (uint8_t)(v < 10 ? 10 : (v > 100 ? 100 : v));
     }
+    s.wake_enabled = net_form_get(body, "wakeon", tmp, sizeof(tmp));
+    if (net_form_get(body, "wake", tmp, sizeof(tmp)) && au_wake_valid(tmp)) strcpy(s.wake_word, tmp);
     s.mirror_x = net_form_get(body, "mirror", tmp, sizeof(tmp));
     if (net_form_get(body, "ssid", tmp, sizeof(s.ssid))) {
         au_trim(tmp);

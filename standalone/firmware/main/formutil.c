@@ -171,6 +171,19 @@ int net_setup_page_build(char *out, size_t cap, const setup_page_info_t *in)
              in->volume < 10 ? 10 : (in->volume > 100 ? 100 : in->volume));
     A(line);
 
+    A(in->wake_enabled
+      ? "<label class=cb><input type=checkbox name=wakeon value=1 checked>Hands-free wake word</label>"
+      : "<label class=cb><input type=checkbox name=wakeon value=1>Hands-free wake word</label>");
+    A("<label>Wake word</label><select name=wake>");
+    const char *cur_wake = (in->wake_word && au_wake_valid(in->wake_word)) ? in->wake_word : AU_DEFAULT_WAKE;
+    for (int i = 0; i < AU_WAKE_COUNT; i++) {
+        snprintf(line, sizeof(line), "<option value=\"%s\"%s>%s</option>", AU_WAKES[i].id,
+                 strcmp(cur_wake, AU_WAKES[i].id) == 0 ? " selected" : "", AU_WAKES[i].label);
+        A(line);
+    }
+    A("</select><small>Say the wake word to start talking without tapping (runs offline on the sphere). "
+      "\"Hi, ESP\" and \"Alexa\" are trained on real voices; \"Jarvis\" and \"Computer\" are synthetic.</small>");
+
     A("<h2>3. Home Wi-Fi</h2><label>Wi-Fi name</label><input name=ssid list=nets autocomplete=off autocapitalize=off value=\"");
     E(in->ssid);
     A("\"><datalist id=nets>");
@@ -186,7 +199,7 @@ int net_setup_page_build(char *out, size_t cap, const setup_page_info_t *in)
                    : "<label class=cb><input type=checkbox name=mirror value=1>Flip the screen (only if text looks mirrored)</label>");
     A("<button type=submit>Save</button></form>");
 
-    A("<h2>Using it</h2><small>Tap the screen (or press BOOT) and talk; it stops when you pause. "
+    A("<h2>Using it</h2><small>Say the wake word, or tap the screen / press BOOT, and talk; it stops when you pause. "
       "Tap again to stop early or to cut Thad off. Touch and hold for the clock. "
       "Hold BOOT about 4 seconds to bring this setup hotspot back.</small>");
     A("<form method=post action=/flash><button class=sec type=submit>USB flash mode</button></form>"

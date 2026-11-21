@@ -19,6 +19,8 @@ typedef struct {
     const char *voice;
     int volume;
     bool mirror_x;
+    bool wake_enabled;
+    const char *wake_word;
     const char *const *scan_ssids;
     int scan_n;
     const char *last_q;          /* last question / answer (may be NULL) */
