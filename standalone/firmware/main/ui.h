@@ -2,9 +2,22 @@
 #include <stdbool.h>
 #include "protocol.h"
 
+typedef enum {
+    UI_MOOD_NONE = 0,
+    UI_MOOD_HAPPY,
+    UI_MOOD_SAD,
+    UI_MOOD_BORED,
+    UI_MOOD_SLEEPY,
+    UI_MOOD_SURPRISED,
+    UI_MOOD_CURIOUS,
+} ui_mood_t;
+
 void ui_init(void);
 void ui_set_state(ui_state_t state, const char *label, const char *text);
 ui_state_t ui_get_state(void);
+void ui_set_mood(ui_mood_t mood, int duration_ms);
+void ui_preview_moods(void);
+void ui_wake_activity(void);
 void ui_show_screen(ui_screen_t screen);
 void ui_toggle_screen(void);
 void ui_show_setup(const char *ap_ssid, const char *ap_pass, const char *ip);

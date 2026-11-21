@@ -287,6 +287,45 @@ void au_speech_clean(const char *in, char *out, size_t cap, size_t max_chars)
     while (cut && out[cut - 1] == ' ') out[--cut] = 0;
 }
 
+static int ci_eq(const char *a, const char *b, size_t n)
+{
+    for (size_t i = 0; i < n; i++) {
+        if (tolower((unsigned char)a[i]) != tolower((unsigned char)b[i])) return 0;
+    }
+    return b[n] == 0;
+}
+
+au_mood_t au_extract_mood(char *text)
+{
+    if (!text) return AU_MOOD_NONE;
+    char *p = text;
+    while (*p && isspace((unsigned char)*p)) p++;
+    if (!(p[0] == '[' && tolower((unsigned char)p[1]) == 'm' && tolower((unsigned char)p[2]) == 'o' &&
+          tolower((unsigned char)p[3]) == 'o' && tolower((unsigned char)p[4]) == 'd' && p[5] == ':')) {
+        return AU_MOOD_NONE;
+    }
+    char *end = strchr(p + 6, ']');
+    if (!end || (size_t)(end - (p + 6)) > 24) return AU_MOOD_NONE;
+
+    const char *tag = p + 6;
+    size_t len = (size_t)(end - tag);
+    while (len && isspace((unsigned char)*tag)) { tag++; len--; }
+    while (len && isspace((unsigned char)tag[len - 1])) len--;
+
+    au_mood_t mood = AU_MOOD_NONE;
+    if      (len == 5 && ci_eq(tag, "happy", 5))     mood = AU_MOOD_HAPPY;
+    else if (len == 3 && ci_eq(tag, "sad", 3))       mood = AU_MOOD_SAD;
+    else if (len == 5 && ci_eq(tag, "bored", 5))     mood = AU_MOOD_BORED;
+    else if (len == 6 && ci_eq(tag, "sleepy", 6))    mood = AU_MOOD_SLEEPY;
+    else if (len == 9 && ci_eq(tag, "surprised", 9)) mood = AU_MOOD_SURPRISED;
+    else if (len == 7 && ci_eq(tag, "curious", 7))   mood = AU_MOOD_CURIOUS;
+
+    char *rest = end + 1;
+    while (*rest && isspace((unsigned char)*rest)) rest++;
+    memmove(text, rest, strlen(rest) + 1);
+    return mood;
+}
+
 int au_system_prompt(char *out, size_t cap, const char *local_time)
 {
     return snprintf(out, cap,
@@ -296,17 +335,21 @@ int au_system_prompt(char *out, size_t cap, const char *local_time)
         "answer in one to three short sentences (under 60 words) unless he asks for more; "
         "plain conversational English; no markdown, lists, emojis, URLs or code. "
         "Be warm, direct and a little witty. If you are unsure, say so briefly. "
+        "Optionally start your reply with a hidden tag [mood:happy], [mood:curious], [mood:surprised], "
+        "or [mood:sad] when it fits the tone (never mention the tag). "
         "You cannot browse the web, send email, or see his calendar from this device.%s%s",
         (local_time && local_time[0]) ? " Current local date and time: " : "",
         (local_time && local_time[0]) ? local_time : "");
 }
 
 /* ----------------------------------------------------------------- VAD */
-#define AU_VAD_NO_SPEECH_MS 7000
-#define VAD_SILENCE_MS   1100
-#define VAD_MIN_SPEECH_MS 350
-#define VAD_MAX_MS       15000
-#define VAD_MIN_RMS      350.0f
+#define AU_VAD_NO_SPEECH_MS  5000
+#define VAD_SILENCE_MS       900
+#define VAD_MIN_SPEECH_MS    220
+#define VAD_MIN_RECORD_MS    600
+#define VAD_MAX_MS           8000
+#define VAD_MIN_RMS          250.0f
+#define VAD_MAX_THRESH       2500.0f
 
 void au_vad_init(au_vad_t *v, int frame_ms)
 {
@@ -323,17 +366,37 @@ uint32_t au_rms(const int16_t *pcm, size_t n)
     return (uint32_t)sqrt(acc / n);
 }
 
+uint32_t au_rms_ac(const int16_t *pcm, size_t n, uint16_t *peak_out)
+{
+    if (peak_out) *peak_out = 0;
+    if (!pcm || !n) return 0;
+    double sum = 0;
+    for (size_t i = 0; i < n; i++) sum += pcm[i];
+    double mean = sum / (double)n;
+    double acc = 0, pk = 0;
+    for (size_t i = 0; i < n; i++) {
+        double d = (double)pcm[i] - mean;
+        double ad = d < 0 ? -d : d;
+        if (ad > pk) pk = ad;
+        acc += d * d;
+    }
+    if (peak_out) *peak_out = pk > 65535.0 ? 65535 : (uint16_t)pk;
+    return (uint32_t)sqrt(acc / (double)n);
+}
+
 vad_result_t au_vad_feed(au_vad_t *v, uint32_t rms)
 {
     float r = (float)rms;
     v->elapsed_ms += v->frame_ms;
     if (v->noise < 0) v->noise = r < 800.0f ? r : 800.0f;   /* first frame may already be speech */
-    float thresh = v->noise * 3.0f;
+    float thresh = v->noise * 2.4f + 120.0f;
     if (thresh < VAD_MIN_RMS) thresh = VAD_MIN_RMS;
+    if (thresh > VAD_MAX_THRESH) thresh = VAD_MAX_THRESH;
     bool loud = r > thresh;
-    if (!loud) {
-        /* track background noise slowly (only while quiet) */
-        v->noise = v->noise * 0.95f + r * 0.05f;
+    if (!loud || (!v->started && r < v->noise)) {
+        /* adapt background noise floor during quiet periods */
+        v->noise = v->noise * 0.90f + r * 0.10f;
+        if (v->noise > 1200.0f) v->noise = 1200.0f;
     }
     if (loud) {
         v->speech_ms += v->frame_ms;
@@ -344,7 +407,7 @@ vad_result_t au_vad_feed(au_vad_t *v, uint32_t rms)
         if (!v->started) v->speech_ms = 0;
     }
     if (v->elapsed_ms >= VAD_MAX_MS) return AU_VAD_MAX_LEN;
-    if (v->started && v->silence_ms >= VAD_SILENCE_MS) return AU_VAD_DONE;
+    if (v->started && v->silence_ms >= VAD_SILENCE_MS && v->elapsed_ms >= VAD_MIN_RECORD_MS) return AU_VAD_DONE;
     if (!v->started && v->elapsed_ms >= AU_VAD_NO_SPEECH_MS) return AU_VAD_NO_SPEECH;
     return v->started ? AU_VAD_SPEECH : AU_VAD_WAITING;
 }

@@ -38,7 +38,7 @@ extern const uint8_t srmodels_bin_start[] asm("_binary_srmodels_bin_start");
 
 #define TAG "thad"
 #define FRAME_SAMPLES   512                          /* 32 ms */
-#define REC_MAX_SAMPLES (AUDIO_SAMPLE_RATE * 16)     /* 16 s */
+#define REC_MAX_SAMPLES (AUDIO_SAMPLE_RATE * 9)      /* 9 s */
 #define RESP_MAX        (48 * 1024)
 #define REPLY_MAX       1400
 #define SPOKEN_MAX      600
@@ -62,7 +62,8 @@ static srmodel_list_t *s_models;
 static const esp_afe_sr_iface_t *s_afe;
 static esp_afe_sr_data_t *s_afe_data;
 static char s_active_word[28];
-static char s_last_q[520], s_last_a[REPLY_MAX];
+static char s_last_q[520], s_last_a[REPLY_MAX], s_last_err[128];
+static uint32_t s_last_mic_peak, s_last_mic_rms;
 static char *s_hist_text[HIST_TURNS];
 static const char *s_hist_role[HIST_TURNS];
 static int s_hist_n;
@@ -85,6 +86,39 @@ static void set_last(const char *q, const char *a)
     xSemaphoreTake(s_lock, portMAX_DELAY);
     if (q) snprintf(s_last_q, sizeof(s_last_q), "%s", q);
     if (a) snprintf(s_last_a, sizeof(s_last_a), "%s", a);
+    xSemaphoreGive(s_lock);
+}
+
+static void set_err(const char *err)
+{
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    snprintf(s_last_err, sizeof(s_last_err), "%s", err ? err : "");
+    xSemaphoreGive(s_lock);
+}
+
+static void set_mic_diag(uint32_t peak, uint32_t rms)
+{
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    s_last_mic_peak = peak;
+    s_last_mic_rms = rms;
+    xSemaphoreGive(s_lock);
+}
+
+void assistant_diag(assistant_diag_t *out)
+{
+    if (!out) return;
+    memset(out, 0, sizeof(*out));
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    snprintf(out->last_err, sizeof(out->last_err), "%s", s_last_err[0] ? s_last_err : "None");
+    snprintf(out->last_q, sizeof(out->last_q), "%s", s_last_q);
+    snprintf(out->last_a, sizeof(out->last_a), "%.255s", s_last_a);
+    out->mic_peak = s_last_mic_peak;
+    out->mic_rms = s_last_mic_rms;
+    if (s_afe_active && s_active_word[0]) {
+        snprintf(out->wake_active, sizeof(out->wake_active), "on (%s)", au_wake_label(s_active_word));
+    } else {
+        snprintf(out->wake_active, sizeof(out->wake_active), "off");
+    }
     xSemaphoreGive(s_lock);
 }
 
@@ -114,6 +148,7 @@ void assistant_tap(void)
     if (s_listening) { s_stop_rec = true; return; }
     if (s_speaking) { s_hush = true; audio_stop(); return; }
     if (s_busy) return;
+    ui_wake_activity();
     s_wake_paused = true;
     ev_t e = { .type = EV_TAP };
     if (xQueueSend(s_q, &e, 0) != pdTRUE) s_wake_paused = false;
@@ -159,13 +194,15 @@ static esp_http_client_handle_t open_post(const char *url, const char *ctype, in
     return c;
 }
 
-static void read_all(esp_http_client_handle_t c, http_result_t *r)
+static void read_all(esp_http_client_handle_t c, http_result_t *r, int max_ms)
 {
     r->body = heap_caps_calloc(1, RESP_MAX, MALLOC_CAP_SPIRAM);
     r->len = 0;
     if (!r->body) return;
+    int64_t deadline = now_ms() + max_ms;
     int n;
-    while (r->len < RESP_MAX - 1 && (n = esp_http_client_read(c, r->body + r->len, RESP_MAX - 1 - r->len)) > 0) {
+    while (r->len < RESP_MAX - 1 && now_ms() < deadline &&
+           (n = esp_http_client_read(c, r->body + r->len, RESP_MAX - 1 - r->len)) > 0) {
         r->len += n;
     }
     r->body[r->len] = 0;
@@ -196,7 +233,7 @@ static bool post(const char *url, const char *ctype, const char *auth_name, cons
         }
         if (wrote && esp_http_client_fetch_headers(c) >= 0) {
             r->status = esp_http_client_get_status_code(c);
-            read_all(c, r);
+            read_all(c, r, timeout_ms + 4000);
             ok = true;
         }
     }
@@ -209,39 +246,84 @@ static bool post(const char *url, const char *ctype, const char *auth_name, cons
 static void fail(const char *msg)
 {
     ESP_LOGW(TAG, "%s", msg);
+    set_err(msg);
     ui_set_reply(NULL);
+    ui_set_mood(UI_MOOD_SAD, 3300);
     ui_set_state(UI_STATE_ERROR, "", msg);
-    vTaskDelay(pdMS_TO_TICKS(3500));
+    vTaskDelay(pdMS_TO_TICKS(3200));
+    ui_set_mood(UI_MOOD_NONE, 0);
     ui_set_state(UI_STATE_IDLE, "", "");
 }
 
-/* Record until pause / tap / 15 s. Returns samples (0 = nothing heard). */
-static size_t record(int16_t *buf)
+/* Record until pause / tap / 8 s hard cap. Returns samples (0 = nothing heard or mic error). */
+static size_t record(int16_t *buf, bool *mic_error, bool play_chime)
 {
+    *mic_error = false;
     s_stop_rec = false;
     s_listening = true;
     if (audio_is_playing()) { audio_stop(); vTaskDelay(pdMS_TO_TICKS(60)); }
     ui_set_reply(NULL);
     ui_set_state(UI_STATE_LISTENING, "", "Listening...");
-    audio_play_chime();
-    vTaskDelay(pdMS_TO_TICKS(320));              /* let the chime finish so it is not recorded */
+    int16_t frame[FRAME_SAMPLES];
+    if (play_chime) {
+        audio_play_chime();
+        vTaskDelay(pdMS_TO_TICKS(420));          /* let the 250 ms chime + DMA tail finish */
+        for (int i = 0; i < 2; i++) audio_mic_read(frame, FRAME_SAMPLES);   /* drain chime echo */
+    } else {
+        audio_mic_read(frame, FRAME_SAMPLES);    /* drain 1 stale frame (32 ms) */
+    }
+
     au_vad_t vad;
     au_vad_init(&vad, FRAME_SAMPLES * 1000 / AUDIO_SAMPLE_RATE);
+    const size_t min_samples = (AUDIO_SAMPLE_RATE * 6) / 10;            /* 0.6 s minimum */
     size_t n = 0;
+    uint32_t max_peak = 0, max_rms = 0;
+    int read_failures = 0, zero_frames = 0;
     bool heard = false;
-    int16_t frame[FRAME_SAMPLES];
+    int64_t rec_start = now_ms();
+
     while (n + FRAME_SAMPLES <= REC_MAX_SAMPLES) {
+        if (now_ms() - rec_start >= 8400) { heard = n >= min_samples; break; }
         size_t got = audio_mic_read(frame, FRAME_SAMPLES);
-        if (got == 0) break;
+        if (got == 0) {
+            if (++read_failures >= 3) { *mic_error = true; break; }
+            vTaskDelay(pdMS_TO_TICKS(20));
+            continue;
+        }
+        read_failures = 0;
         memcpy(buf + n, frame, got * sizeof(int16_t));
         n += got;
-        vad_result_t v = au_vad_feed(&vad, au_rms(frame, got));
+
+        uint16_t pk = 0;
+        uint32_t rms = au_rms_ac(frame, got, &pk);
+        if (pk > max_peak) max_peak = pk;
+        if (rms > max_rms) max_rms = rms;
+        if (pk == 0) {
+            if (++zero_frames >= 40 && max_peak == 0) { *mic_error = true; break; }
+        } else {
+            zero_frames = 0;
+        }
+
+        vad_result_t v = au_vad_feed(&vad, rms);
         if (v == AU_VAD_SPEECH) heard = true;
-        if (s_stop_rec) { heard = heard || vad.speech_ms > 200; break; }
-        if (v == AU_VAD_DONE || v == AU_VAD_MAX_LEN) { heard = true; break; }
+        if (s_stop_rec && n >= min_samples) {
+            /* Tap while listening: stop recording and send now (always proceed to STT) */
+            heard = true;
+            break;
+        }
+        if (v == AU_VAD_DONE || v == AU_VAD_MAX_LEN) {
+            heard = true;
+            break;
+        }
         if (v == AU_VAD_NO_SPEECH) break;
     }
     s_listening = false;
+    set_mic_diag(max_peak, max_rms);
+    ESP_LOGI(TAG, "rec %u ms: peak=%u rms=%u heard=%d stop=%d err=%d",
+             (unsigned)(n * 1000 / AUDIO_SAMPLE_RATE), (unsigned)max_peak,
+             (unsigned)max_rms, heard, (int)s_stop_rec, *mic_error);
+    if (max_peak == 0) *mic_error = true;
+    if (*mic_error) return 0;
     return heard ? n : 0;
 }
 
@@ -253,7 +335,7 @@ static bool speech_to_text(const char *key, const int16_t *pcm, size_t samples, 
     snprintf(auth, sizeof(auth), "Token %s", key);
     http_result_t r;
     bool ok = post(DG_LISTEN_URL, "audio/wav", "Authorization", auth, NULL, NULL,
-                   hdr, sizeof(hdr), pcm, (int)(samples * 2), 20000, &r);
+                   hdr, sizeof(hdr), pcm, (int)(samples * 2), 15000, &r);
     memset(auth, 0, sizeof(auth));
     if (!ok) { free(r.body); fail("Can't reach Deepgram"); return false; }
     if (r.status != 200) {
@@ -279,9 +361,9 @@ static bool ask_claude(const sphere_settings_t *s, const char *question, char *r
     struct tm tm;
     localtime_r(&t, &tm);
     if (tm.tm_year >= (2024 - 1900)) strftime(tbuf, sizeof(tbuf), "%A, %B %d, %Y, %I:%M %p", &tm);
-    char *system = malloc(1200);
+    char *system = malloc(1400);
     if (!system) return false;
-    au_system_prompt(system, 1200, tbuf);
+    au_system_prompt(system, 1400, tbuf);
 
     au_turn_t hist[HIST_TURNS];
     for (int i = 0; i < s_hist_n; i++) { hist[i].role = s_hist_role[i]; hist[i].text = s_hist_text[i]; }
@@ -293,7 +375,7 @@ static bool ask_claude(const sphere_settings_t *s, const char *question, char *r
         if (!req) break;
         http_result_t r;
         bool sent = post(ANTHROPIC_URL, "application/json", "x-api-key", s->api_key,
-                         "anthropic-version", AU_ANTHROPIC_VERSION, req, (int)strlen(req), NULL, 0, 30000, &r);
+                         "anthropic-version", AU_ANTHROPIC_VERSION, req, (int)strlen(req), NULL, 0, 20000, &r);
         free(req);
         if (!sent) { free(r.body); fail("Can't reach Claude"); break; }
         char err[160];
@@ -334,14 +416,16 @@ static void speak(const sphere_settings_t *s, const char *text)
     if (!body) return;
     char auth[SETTINGS_SPEECH_MAX + 8];
     snprintf(auth, sizeof(auth), "Token %s", s->speech_key);
-    esp_http_client_handle_t c = open_post(url, "application/json", 20000);
-    if (!c) { memset(auth, 0, sizeof(auth)); free(body); return; }
+    esp_http_client_handle_t c = open_post(url, "application/json", 15000);
+    if (!c) { memset(auth, 0, sizeof(auth)); free(body); set_err("TTS init failed"); return; }
     esp_http_client_set_header(c, "Authorization", auth);
     memset(auth, 0, sizeof(auth));
     int blen = (int)strlen(body);
     bool started = false;
+    bool conn_ok = false;
     if (esp_http_client_open(c, blen) == ESP_OK && esp_http_client_write(c, body, blen) == blen &&
         esp_http_client_fetch_headers(c) >= 0) {
+        conn_ok = true;
         int status = esp_http_client_get_status_code(c);
         if (status == 200) {
             s_speaking = true;
@@ -352,7 +436,8 @@ static void speak(const sphere_settings_t *s, const char *text)
             bool have_odd = false;
             uint8_t odd = 0;
             int n;
-            while (buf && !s_hush && (n = esp_http_client_read(c, (char *)buf + 1, 4096)) > 0) {
+            int64_t dl = now_ms() + 18000;
+            while (buf && !s_hush && now_ms() < dl && (n = esp_http_client_read(c, (char *)buf + 1, 4096)) > 0) {
                 uint8_t *p = buf + 1;
                 if (have_odd) { p = buf; p[0] = odd; n++; have_odd = false; }
                 if (n & 1) { odd = p[n - 1]; have_odd = true; n--; }
@@ -362,21 +447,24 @@ static void speak(const sphere_settings_t *s, const char *text)
             audio_stream_end();
         } else {
             http_result_t r = {0};
-            read_all(c, &r);
-            char err[96];
+            read_all(c, &r, 8000);
+            char err[96], msg[128];
             au_parse_error_message(r.body, err, sizeof(err));
+            snprintf(msg, sizeof(msg), (status == 401 || status == 403) ? "Deepgram key rejected" : "TTS error %d", status);
             ESP_LOGW(TAG, "TTS HTTP %d: %s", status, err);
+            set_err(msg);
             free(r.body);
         }
     }
+    if (!conn_ok) set_err("Can't reach Deepgram TTS");
     esp_http_client_close(c);
     esp_http_client_cleanup(c);
     free(body);
     if (!started) { s_speaking = false; return; }
-    /* wait for the speaker to finish (or a tap to hush) */
-    int64_t until = now_ms() + 60000;
+    /* wait for the speaker to finish (or a tap to hush), bounded to 25 s */
+    int64_t until = now_ms() + 25000;
     while (!s_hush && audio_is_playing() && now_ms() < until) vTaskDelay(pdMS_TO_TICKS(50));
-    if (s_hush) audio_stop();
+    if (audio_is_playing()) audio_stop();
     s_speaking = false;
 }
 
@@ -389,7 +477,7 @@ static void handle(const ev_t *e, int16_t *rec)
     char *spoken = calloc(1, REPLY_MAX);
     if (!question || !reply || !spoken) goto done;
 
-    if (!net_is_connected()) { fail("No Wi-Fi"); goto done; }
+    if (!net_is_connected()) { fail("No internet"); goto done; }
 
     if (e->type == EV_PREVIEW) {
         if (!s.speech_key[0]) { fail("Save a Deepgram key first, then preview."); goto done; }
@@ -410,6 +498,7 @@ static void handle(const ev_t *e, int16_t *rec)
     }
     bool voice = s.speech_key[0] != 0;
 
+    ui_wake_activity();
     if (e->type == EV_TAP || e->type == EV_WAKE) {
         if (!voice) {
             char msg[120];
@@ -417,10 +506,14 @@ static void handle(const ev_t *e, int16_t *rec)
             fail(msg);
             goto done;
         }
-        xSemaphoreTake(s_mic_lock, portMAX_DELAY);
-        size_t n = record(rec);
+        ui_set_mood(e->type == EV_WAKE ? UI_MOOD_SURPRISED : UI_MOOD_NONE, e->type == EV_WAKE ? 700 : 0);
+        if (xSemaphoreTake(s_mic_lock, pdMS_TO_TICKS(1000)) != pdTRUE) { fail("Mic busy"); goto done; }
+        bool mic_err = false;
+        size_t n = record(rec, &mic_err, s.chime_enabled);
         xSemaphoreGive(s_mic_lock);
-        if (n == 0) { ui_set_state(UI_STATE_IDLE, "", ""); goto done; }
+        if (mic_err) { fail("Mic: no audio"); goto done; }
+        if (n == 0) { fail("Didn't catch that"); goto done; }
+        ui_set_mood(UI_MOOD_CURIOUS, 0);
         ui_set_state(UI_STATE_THINKING, "", "");
         if (!speech_to_text(s.speech_key, rec, n, question, 520)) goto done;
         if (!question[0]) { fail("Didn't catch that"); goto done; }
@@ -430,12 +523,26 @@ static void handle(const ev_t *e, int16_t *rec)
         set_last(question, "");
     }
 
+    ui_set_mood(UI_MOOD_CURIOUS, 0);
     ui_set_state(UI_STATE_THINKING, "", "");
     ui_set_reply(question);                       /* show what was heard while thinking */
     if (!ask_claude(&s, question, reply, REPLY_MAX)) { set_last(NULL, "(error - see the sphere)"); goto done; }
+    au_mood_t am = au_extract_mood(reply);
+    ui_mood_t reply_mood = UI_MOOD_HAPPY;
+    switch (am) {
+    case AU_MOOD_SAD:       reply_mood = UI_MOOD_SAD; break;
+    case AU_MOOD_BORED:     reply_mood = UI_MOOD_BORED; break;
+    case AU_MOOD_SLEEPY:    reply_mood = UI_MOOD_SLEEPY; break;
+    case AU_MOOD_SURPRISED: reply_mood = UI_MOOD_SURPRISED; break;
+    case AU_MOOD_CURIOUS:   reply_mood = UI_MOOD_CURIOUS; break;
+    case AU_MOOD_HAPPY:
+    case AU_MOOD_NONE:
+    default:                reply_mood = UI_MOOD_HAPPY; break;
+    }
     au_speech_clean(reply, spoken, REPLY_MAX, voice ? SPOKEN_MAX : REPLY_MAX - 1);
     set_last(NULL, spoken);
 
+    ui_set_mood(am == AU_MOOD_NONE ? UI_MOOD_NONE : reply_mood, 0);
     ui_set_state(UI_STATE_SPEAKING, "", "");
     ui_set_reply(spoken);
     if (voice) {
@@ -447,6 +554,8 @@ static void handle(const ev_t *e, int16_t *rec)
         for (int t = 0; t < ms && !s_hush; t += 100) vTaskDelay(pdMS_TO_TICKS(100));
         s_speaking = false;
     }
+    set_err("");
+    ui_set_mood(reply_mood, 3500);
     ui_set_state(UI_STATE_IDLE, "", "");
     /* keep the reply text under the eyes for a while; ui clears it on next turn */
     ui_fade_reply(20000);
