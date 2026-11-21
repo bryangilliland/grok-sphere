@@ -29,6 +29,7 @@
 #include "freertos/event_groups.h"
 #include "freertos/task.h"
 #include "esp_afe_sr_iface.h"
+#include "esp_vad.h"
 #include "esp_afe_sr_models.h"
 #include "model_path.h"
 #include "net.h"
@@ -37,7 +38,8 @@
 extern const uint8_t srmodels_bin_start[] asm("_binary_srmodels_bin_start");
 
 #define TAG "thad"
-#define FRAME_SAMPLES   512                          /* 32 ms */
+#define REC_FRAME_SAMPLES 480                        /* 30 ms (matches esp-sr VAD) */
+#define PRE_RING_FRAMES 48                           /* ~1.5 s pre-wake/tap baseline */
 #define REC_MAX_SAMPLES (AUDIO_SAMPLE_RATE * 9)      /* 9 s */
 #define RESP_MAX        (48 * 1024)
 #define REPLY_MAX       1400
@@ -62,8 +64,14 @@ static srmodel_list_t *s_models;
 static const esp_afe_sr_iface_t *s_afe;
 static esp_afe_sr_data_t *s_afe_data;
 static char s_active_word[28];
-static char s_last_q[520], s_last_a[REPLY_MAX], s_last_err[128];
-static uint32_t s_last_mic_peak, s_last_mic_rms;
+static EXT_RAM_BSS_ATTR char s_last_q[520], s_last_a[REPLY_MAX], s_last_err[128];
+static uint32_t s_last_mic_peak, s_last_mic_rms, s_last_noise_floor, s_last_rec_ms;
+static bool s_last_speech_detected;
+static EXT_RAM_BSS_ATTR uint32_t s_pre_rms[PRE_RING_FRAMES];
+static size_t s_pre_head, s_pre_count;
+static int64_t s_pre_last_ms;
+static uint32_t s_snap_noise_floor;
+static volatile bool s_afe_vad_speech;
 static char *s_hist_text[HIST_TURNS];
 static const char *s_hist_role[HIST_TURNS];
 static int s_hist_n;
@@ -96,12 +104,36 @@ static void set_err(const char *err)
     xSemaphoreGive(s_lock);
 }
 
-static void set_mic_diag(uint32_t peak, uint32_t rms)
+static void set_mic_diag(uint32_t peak, uint32_t rms, uint32_t noise_floor, bool speech, uint32_t rec_ms)
 {
     xSemaphoreTake(s_lock, portMAX_DELAY);
     s_last_mic_peak = peak;
     s_last_mic_rms = rms;
+    s_last_noise_floor = noise_floor;
+    s_last_speech_detected = speech;
+    s_last_rec_ms = rec_ms;
     xSemaphoreGive(s_lock);
+}
+
+static void pre_ring_push(uint32_t rms)
+{
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    s_pre_rms[s_pre_head] = rms;
+    s_pre_head = (s_pre_head + 1) % PRE_RING_FRAMES;
+    if (s_pre_count < PRE_RING_FRAMES) s_pre_count++;
+    s_pre_last_ms = now_ms();
+    xSemaphoreGive(s_lock);
+}
+
+static uint32_t snapshot_noise_floor(void)
+{
+    uint32_t nf = 0;
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    if (s_pre_count >= 4 && (now_ms() - s_pre_last_ms) < 500) {
+        nf = au_noise_percentile(s_pre_rms, s_pre_count);
+    }
+    xSemaphoreGive(s_lock);
+    return nf;
 }
 
 void assistant_diag(assistant_diag_t *out)
@@ -114,6 +146,9 @@ void assistant_diag(assistant_diag_t *out)
     snprintf(out->last_a, sizeof(out->last_a), "%.255s", s_last_a);
     out->mic_peak = s_last_mic_peak;
     out->mic_rms = s_last_mic_rms;
+    out->noise_floor = s_last_noise_floor;
+    out->speech_detected = s_last_speech_detected;
+    out->rec_ms = s_last_rec_ms;
     if (s_afe_active && s_active_word[0]) {
         snprintf(out->wake_active, sizeof(out->wake_active), "on (%s)", au_wake_label(s_active_word));
     } else {
@@ -149,6 +184,7 @@ void assistant_tap(void)
     if (s_speaking) { s_hush = true; audio_stop(); return; }
     if (s_busy) return;
     ui_wake_activity();
+    s_snap_noise_floor = snapshot_noise_floor();
     s_wake_paused = true;
     ev_t e = { .type = EV_TAP };
     if (xQueueSend(s_q, &e, 0) != pdTRUE) s_wake_paused = false;
@@ -255,7 +291,7 @@ static void fail(const char *msg)
     ui_set_state(UI_STATE_IDLE, "", "");
 }
 
-/* Record until pause / tap / 8 s hard cap. Returns samples (0 = nothing heard or mic error). */
+/* Record until energy drop / tap / 8 s hard cap. Never discards non-dead mic audio; Deepgram decides. */
 static size_t record(int16_t *buf, bool *mic_error, bool play_chime)
 {
     *mic_error = false;
@@ -264,27 +300,38 @@ static size_t record(int16_t *buf, bool *mic_error, bool play_chime)
     if (audio_is_playing()) { audio_stop(); vTaskDelay(pdMS_TO_TICKS(60)); }
     ui_set_reply(NULL);
     ui_set_state(UI_STATE_LISTENING, "", "Listening...");
-    int16_t frame[FRAME_SAMPLES];
+    int16_t frame[REC_FRAME_SAMPLES];
     if (play_chime) {
         audio_play_chime();
         vTaskDelay(pdMS_TO_TICKS(420));          /* let the 250 ms chime + DMA tail finish */
-        for (int i = 0; i < 2; i++) audio_mic_read(frame, FRAME_SAMPLES);   /* drain chime echo */
+        for (int i = 0; i < 2; i++) audio_mic_read(frame, REC_FRAME_SAMPLES);
     } else {
-        audio_mic_read(frame, FRAME_SAMPLES);    /* drain 1 stale frame (32 ms) */
+        audio_mic_read(frame, REC_FRAME_SAMPLES);    /* drain 1 stale frame (30 ms) */
     }
 
+    uint32_t baseline = s_snap_noise_floor;
+    if (baseline == 0) {
+        /* Fallback when WakeNet wasn't running: sample initial frame as baseline (capped) */
+        if (audio_mic_read(frame, REC_FRAME_SAMPLES) == REC_FRAME_SAMPLES) {
+            baseline = au_rms_ac(frame, REC_FRAME_SAMPLES, NULL);
+            if (baseline > 1200) baseline = 1200;
+        } else {
+            baseline = 250;
+        }
+    }
+
+    vad_handle_t vad_inst = vad_create(VAD_MODE_2);
     au_vad_t vad;
-    au_vad_init(&vad, FRAME_SAMPLES * 1000 / AUDIO_SAMPLE_RATE);
-    const size_t min_samples = (AUDIO_SAMPLE_RATE * 6) / 10;            /* 0.6 s minimum */
+    au_vad_init_with_baseline(&vad, 30, (float)baseline);
+    const size_t min_tap_samples = (AUDIO_SAMPLE_RATE * 6) / 10;        /* 0.6 s if tapped early */
     size_t n = 0;
     uint32_t max_peak = 0, max_rms = 0;
     int read_failures = 0, zero_frames = 0;
-    bool heard = false;
     int64_t rec_start = now_ms();
 
-    while (n + FRAME_SAMPLES <= REC_MAX_SAMPLES) {
-        if (now_ms() - rec_start >= 8400) { heard = n >= min_samples; break; }
-        size_t got = audio_mic_read(frame, FRAME_SAMPLES);
+    while (n + REC_FRAME_SAMPLES <= REC_MAX_SAMPLES) {
+        if (now_ms() - rec_start >= 8400) break;
+        size_t got = audio_mic_read(frame, REC_FRAME_SAMPLES);
         if (got == 0) {
             if (++read_failures >= 3) { *mic_error = true; break; }
             vTaskDelay(pdMS_TO_TICKS(20));
@@ -304,27 +351,25 @@ static size_t record(int16_t *buf, bool *mic_error, bool play_chime)
             zero_frames = 0;
         }
 
-        vad_result_t v = au_vad_feed(&vad, rms);
-        if (v == AU_VAD_SPEECH) heard = true;
-        if (s_stop_rec && n >= min_samples) {
-            /* Tap while listening: stop recording and send now (always proceed to STT) */
-            heard = true;
-            break;
+        bool eng_speech = false;
+        if (vad_inst && got == REC_FRAME_SAMPLES) {
+            eng_speech = (vad_process(vad_inst, frame, AUDIO_SAMPLE_RATE, 30) == VAD_SPEECH);
         }
-        if (v == AU_VAD_DONE || v == AU_VAD_MAX_LEN) {
-            heard = true;
-            break;
-        }
-        if (v == AU_VAD_NO_SPEECH) break;
+        vad_result_t v = au_vad_feed_vad(&vad, rms, eng_speech);
+        if (s_stop_rec && n >= min_tap_samples) break;
+        if (v == AU_VAD_DONE || v == AU_VAD_MAX_LEN) break;
     }
+    if (vad_inst) vad_destroy(vad_inst);
     s_listening = false;
-    set_mic_diag(max_peak, max_rms);
-    ESP_LOGI(TAG, "rec %u ms: peak=%u rms=%u heard=%d stop=%d err=%d",
-             (unsigned)(n * 1000 / AUDIO_SAMPLE_RATE), (unsigned)max_peak,
-             (unsigned)max_rms, heard, (int)s_stop_rec, *mic_error);
+
+    uint32_t rec_ms = (uint32_t)(n * 1000 / AUDIO_SAMPLE_RATE);
+    set_mic_diag(max_peak, max_rms, baseline, vad.started, rec_ms);
+    ESP_LOGI(TAG, "rec %u ms: peak=%u rms=%u noise=%u speech=%d stop=%d err=%d",
+             (unsigned)rec_ms, (unsigned)max_peak, (unsigned)max_rms,
+             (unsigned)baseline, (int)vad.started, (int)s_stop_rec, *mic_error);
     if (max_peak == 0) *mic_error = true;
     if (*mic_error) return 0;
-    return heard ? n : 0;
+    return n;
 }
 
 static bool speech_to_text(const char *key, const int16_t *pcm, size_t samples, char *out, size_t cap)
@@ -361,7 +406,7 @@ static bool ask_claude(const sphere_settings_t *s, const char *question, char *r
     struct tm tm;
     localtime_r(&t, &tm);
     if (tm.tm_year >= (2024 - 1900)) strftime(tbuf, sizeof(tbuf), "%A, %B %d, %Y, %I:%M %p", &tm);
-    char *system = malloc(1400);
+    char *system = heap_caps_malloc(1400, MALLOC_CAP_SPIRAM);
     if (!system) return false;
     au_system_prompt(system, 1400, tbuf);
 
@@ -432,7 +477,7 @@ static void speak(const sphere_settings_t *s, const char *text)
             s_hush = false;
             audio_stream_begin();
             started = true;
-            uint8_t *buf = malloc(4097);
+            uint8_t *buf = heap_caps_malloc(4097, MALLOC_CAP_SPIRAM);
             bool have_odd = false;
             uint8_t odd = 0;
             int n;
@@ -472,9 +517,9 @@ static void handle(const ev_t *e, int16_t *rec)
 {
     sphere_settings_t s;
     app_settings_get(&s);
-    char *question = calloc(1, 520);
-    char *reply = calloc(1, REPLY_MAX);
-    char *spoken = calloc(1, REPLY_MAX);
+    char *question = heap_caps_calloc(1, 520, MALLOC_CAP_SPIRAM);
+    char *reply = heap_caps_calloc(1, REPLY_MAX, MALLOC_CAP_SPIRAM);
+    char *spoken = heap_caps_calloc(1, REPLY_MAX, MALLOC_CAP_SPIRAM);
     if (!question || !reply || !spoken) goto done;
 
     if (!net_is_connected()) { fail("No internet"); goto done; }
@@ -606,12 +651,16 @@ static void wake_fetch_task(void *arg)
         while (s_afe_active && s_afe_data) {
             afe_fetch_result_t *res = s_afe->fetch_with_delay(s_afe_data, pdMS_TO_TICKS(100));
             if (!s_afe_active) break;
-            if (res && res->ret_value != ESP_FAIL && res->wakeup_state == WAKENET_DETECTED) {
-                if (!s_wake_paused && !s_busy && !net_portal_running()) {
-                    ESP_LOGI(TAG, "wake word '%s' detected", s_active_word);
-                    s_wake_paused = true;
-                    ev_t e = { .type = EV_WAKE };
-                    if (xQueueSend(s_q, &e, 0) != pdTRUE) s_wake_paused = false;
+            if (res && res->ret_value != ESP_FAIL) {
+                s_afe_vad_speech = (res->vad_state == VAD_SPEECH);
+                if (res->wakeup_state == WAKENET_DETECTED) {
+                    if (!s_wake_paused && !s_busy && !net_portal_running()) {
+                        ESP_LOGI(TAG, "wake word '%s' detected", s_active_word);
+                        s_snap_noise_floor = snapshot_noise_floor();
+                        s_wake_paused = true;
+                        ev_t e = { .type = EV_WAKE };
+                        if (xQueueSend(s_q, &e, 0) != pdTRUE) s_wake_paused = false;
+                    }
                 }
             }
         }
@@ -651,13 +700,14 @@ static void wake_feed_task(void *arg)
                     cfg->se_init = false;
                     cfg->ns_init = true;
                     cfg->afe_ns_mode = AFE_NS_MODE_WEBRTC;
-                    cfg->vad_init = false;
+                    cfg->vad_init = true;
+                    cfg->vad_mode = VAD_MODE_2;
                     cfg->agc_init = true;
                     cfg->agc_mode = AFE_AGC_MODE_WAKENET;
                     cfg->wakenet_init = true;
                     cfg->wakenet_model_name = want_word;
                     cfg->wakenet_model_name_2 = NULL;
-                    cfg->wakenet_mode = DET_MODE_90;
+                    cfg->wakenet_mode = DET_MODE_95;
                     cfg->memory_alloc_mode = AFE_MEMORY_ALLOC_MORE_PSRAM;
                     cfg->afe_perferred_core = 1;
                     cfg->afe_perferred_priority = 4;
@@ -669,7 +719,7 @@ static void wake_feed_task(void *arg)
                     int chunk = s_afe->get_feed_chunksize(s_afe_data);
                     if (chunk > buf_samples) {
                         free(buf);
-                        buf = malloc((size_t)chunk * sizeof(int16_t));
+                        buf = heap_caps_malloc((size_t)chunk * sizeof(int16_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
                         buf_samples = buf ? chunk : 0;
                     }
                     if (buf) {
@@ -707,6 +757,7 @@ static void wake_feed_task(void *arg)
         size_t got = audio_mic_read(buf, (size_t)buf_samples);
         xSemaphoreGive(s_mic_lock);
         if (got == (size_t)buf_samples) {
+            pre_ring_push(au_rms_ac(buf, got, NULL));
             s_afe->feed(s_afe_data, buf);
         } else {
             vTaskDelay(pdMS_TO_TICKS(100));
@@ -724,7 +775,10 @@ void assistant_init(void)
     s_models = srmodel_load(srmodels_bin_start);
     if (!s_models || s_models->num <= 0) ESP_LOGE(TAG, "WakeNet models failed to load");
     else ESP_LOGI(TAG, "loaded %d WakeNet models", s_models->num);
-    xTaskCreatePinnedToCore(task, "thad", 16384, NULL, 5, NULL, 1);
+    if (xTaskCreatePinnedToCoreWithCaps(task, "thad", 16384, NULL, 5, NULL, 1,
+                                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
+        xTaskCreatePinnedToCore(task, "thad", 16384, NULL, 5, NULL, 1);
+    }
     xTaskCreatePinnedToCore(wake_fetch_task, "wake_fetch", 4096, NULL, 4, NULL, 1);
     xTaskCreatePinnedToCore(wake_feed_task, "wake_feed", 6144, NULL, 3, NULL, 1);
 }
