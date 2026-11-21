@@ -1,7 +1,7 @@
 Grok Sphere standalone - setup (phone friendly)
-1. Laptop, Edge: esptool.spacehuhn.com > Connect > pick the sphere > add grok_sphere_standalone.bin at 0x0 > Program.
-2. Unplug/replug. The sphere shows a QR: scan it with your phone camera (or join the GrokSphere-XXXX Wi-Fi with the password shown).
-3. The setup page opens (or go to http://192.168.4.1). Pick home Wi-Fi + password, paste your Claude key, tap Save.
-4. Optional for voice: paste a free Deepgram key (console.deepgram.com, $200 credit, no card), pick a voice, tap Preview to hear it. Without a key, type on the page.
+1. Laptop, Edge: esptool.spacehuhn.com > Connect > pick the sphere > grok_sphere_standalone.bin at 0x0 (or _app_0x10000.bin at 0x10000 to update & keep settings) > Program.
+2. Unplug/replug. First boot shows a QR: scan it with your phone camera (or join GrokSphere-XXXX Wi-Fi with the password shown).
+3. Setup page opens (or http://192.168.4.1). Pick home Wi-Fi + password, paste your Claude key, tap Save.
+4. Optional for voice: paste a free Deepgram key (console.deepgram.com, $200 credit, no card), pick a voice & wake word, tap Save.
 5. The sphere joins Wi-Fi and the eyes appear. Later settings: http://grok-sphere.local or the IP it shows.
-6. Tap the screen (or BOOT) and talk. Tap again to stop it. Hold the screen = clock. Hold BOOT 4 s = setup hotspot again.
+6. Say "Hi, ESP" (or tap screen / BOOT) and talk. Tap while speaking to hush. Hold screen = clock. Hold BOOT 4 s = setup hotspot.
