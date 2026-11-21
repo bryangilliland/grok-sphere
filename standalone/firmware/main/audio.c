@@ -161,9 +161,10 @@ static esp_err_t init_v1(void)
 size_t audio_mic_read(int16_t *dst, size_t samples)
 {
     if (s_rev == BOARD_AUDIO_V2) {
-        if (esp_codec_dev_read(s_in_dev, dst, samples * sizeof(int16_t)) != ESP_CODEC_DEV_OK) return 0;
+        if (!s_in_dev || esp_codec_dev_read(s_in_dev, dst, samples * sizeof(int16_t)) != ESP_CODEC_DEV_OK) return 0;
         return samples;
     }
+    if (!s_rx) return 0;
     static int32_t raw[512];
     size_t done = 0;
     while (done < samples) {
