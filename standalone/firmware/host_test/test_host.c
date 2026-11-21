@@ -60,7 +60,8 @@ static void test_page(void)
         .chime_enabled = false, .scan_ssids = scans, .scan_n = 3,
         .last_q = "What's 2+2?", .last_a = "Four.", .notice = "Saved.",
         .diag_err = "None", .diag_mic_peak = 3200, .diag_mic_rms = 850,
-        .diag_rssi = -56, .diag_free_heap = 7200 * 1024, .diag_free_int = 138 * 1024,
+        .diag_noise_floor = 420, .diag_speech_detected = true, .diag_rec_ms = 2400,
+        .diag_rssi = -56, .diag_free_heap = 7200 * 1024, .diag_free_int = 96 * 1024, .diag_min_free_int = 72 * 1024,
         .diag_wake = "on (Jarvis)",
     };
     int n = net_setup_page_build(page, 20480, &in);
@@ -82,6 +83,7 @@ static void test_page(void)
     CHECK(!strstr(page, "name=chime value=1 checked"));
     CHECK(strstr(page, "action=/moods") && strstr(page, "Preview moods"));
     CHECK(strstr(page, "Diagnostics") && strstr(page, "peak 3200 / rms 850") && strstr(page, "-56 dBm") && strstr(page, "7200 KB"));
+    CHECK(strstr(page, "Noise floor") && strstr(page, "420") && strstr(page, "Speech detected") && strstr(page, "2.4 s") && strstr(page, "min 72 KB"));
     CHECK(strstr(page, "name=dgkey") && strstr(page, "console.deepgram.com"));
     CHECK(strstr(page, "type=password") != NULL);
     /* first boot: no key -> no ask box, Sonnet selected shows */
@@ -298,6 +300,35 @@ static void test_vad(void)
     /* noisy room: background 900 adapts, speech at 4000 still detected */
     for (int i = 0; i < 600; i++) pat[i] = (i >= 30 && i < 90) ? 4000 : 900 + (i % 3) * 50;
     CHECK(run_vad(pat, 600, &used) == AU_VAD_DONE);
+
+    /* pre-trigger 35th percentile filters out wake-word spike */
+    uint32_t ring[20];
+    for (int i = 0; i < 20; i++) ring[i] = (i >= 14) ? 3500 : 1000 + (i % 4) * 50;
+    uint32_t p35 = au_noise_percentile(ring, 20);
+    CHECK(p35 >= 1000 && p35 <= 1150);
+
+    /* locked-baseline VAD with loud TV (baseline=1100): speech at 1750 + drop to 1100 stops cleanly >= 1.5s */
+    au_vad_t lv;
+    au_vad_init_with_baseline(&lv, 30, 1100.0f);
+    vad_result_t lr = AU_VAD_WAITING;
+    int lv_frames = 0;
+    for (int i = 0; i < 300; i++) {
+        uint32_t r = (i >= 5 && i < 45) ? 1850 : 1100;
+        lr = au_vad_feed_vad(&lv, r, (i >= 5 && i < 45));
+        lv_frames = i + 1;
+        if (lr == AU_VAD_DONE || lr == AU_VAD_MAX_LEN) break;
+    }
+    CHECK(lr == AU_VAD_DONE && lv.started && lv_frames * 30 >= 1500 && lv_frames * 30 < 3000);
+
+    /* locked-baseline VAD NEVER returns AU_VAD_NO_SPEECH even in steady TV noise; runs to 8s cap for STT */
+    au_vad_init_with_baseline(&lv, 30, 1200.0f);
+    lr = AU_VAD_WAITING;
+    for (int i = 0; i < 300; i++) {
+        lr = au_vad_feed_vad(&lv, 1289, false);
+        CHECK(lr != AU_VAD_NO_SPEECH);
+        if (lr == AU_VAD_MAX_LEN) break;
+    }
+    CHECK(lr == AU_VAD_MAX_LEN);
 }
 
 static void test_protocol_states(void)
