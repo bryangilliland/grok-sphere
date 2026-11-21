@@ -18,6 +18,7 @@
 #include "app.h"
 #include "assist_util.h"
 #include "audio.h"
+#include "clock_weather.h"
 #include "esp_crt_bundle.h"
 #include "esp_heap_caps.h"
 #include "esp_http_client.h"
@@ -406,9 +407,11 @@ static bool ask_claude(const sphere_settings_t *s, const char *question, char *r
     struct tm tm;
     localtime_r(&t, &tm);
     if (tm.tm_year >= (2024 - 1900)) strftime(tbuf, sizeof(tbuf), "%A, %B %d, %Y, %I:%M %p", &tm);
-    char *system = heap_caps_malloc(1400, MALLOC_CAP_SPIRAM);
+    char wbuf[240] = "";
+    clock_weather_summary(wbuf, sizeof(wbuf));
+    char *system = heap_caps_malloc(1800, MALLOC_CAP_SPIRAM);
     if (!system) return false;
-    au_system_prompt(system, 1400, tbuf);
+    au_system_prompt(system, 1800, tbuf, wbuf);
 
     au_turn_t hist[HIST_TURNS];
     for (int i = 0; i < s_hist_n; i++) { hist[i].role = s_hist_role[i]; hist[i].text = s_hist_text[i]; }
@@ -451,45 +454,81 @@ static bool ask_claude(const sphere_settings_t *s, const char *question, char *r
     return ok;
 }
 
-/* Stream Deepgram TTS (raw 16 kHz s16le) straight into the speaker buffer. */
-static void speak(const sphere_settings_t *s, const char *text)
+#define TTS_PCM_MAX (2560 * 1024)   /* up to ~80 s of 16 kHz mono PCM per segment in PSRAM */
+
+/* Fetch an entire Deepgram TTS segment (raw 16 kHz s16le) into a PSRAM buffer to avoid streaming underruns. */
+static bool tts_fetch_pcm(const sphere_settings_t *s, const char *seg, uint8_t **out_pcm, size_t *out_len)
 {
+    *out_pcm = NULL;
+    *out_len = 0;
     char url[200];
     snprintf(url, sizeof(url),
              "https://api.deepgram.com/v1/speak?model=%s&encoding=linear16&sample_rate=16000&container=none", s->voice);
-    char *body = au_tts_body(text);
-    if (!body) return;
+    char *body = au_tts_body(seg);
+    if (!body) return false;
     char auth[SETTINGS_SPEECH_MAX + 8];
     snprintf(auth, sizeof(auth), "Token %s", s->speech_key);
-    esp_http_client_handle_t c = open_post(url, "application/json", 15000);
-    if (!c) { memset(auth, 0, sizeof(auth)); free(body); set_err("TTS init failed"); return; }
+
+    esp_http_client_config_t cfg = {
+        .url = url,
+        .method = HTTP_METHOD_POST,
+        .crt_bundle_attach = esp_crt_bundle_attach,
+        .timeout_ms = 20000,
+        .buffer_size = 16384,
+        .buffer_size_tx = 2048,
+        .keep_alive_enable = false,
+    };
+    esp_http_client_handle_t c = esp_http_client_init(&cfg);
+    if (!c) { memset(auth, 0, sizeof(auth)); free(body); set_err("TTS init failed"); return false; }
+    esp_http_client_set_header(c, "Content-Type", "application/json");
     esp_http_client_set_header(c, "Authorization", auth);
     memset(auth, 0, sizeof(auth));
+
     int blen = (int)strlen(body);
-    bool started = false;
-    bool conn_ok = false;
+    bool ok = false, conn_ok = false;
     if (esp_http_client_open(c, blen) == ESP_OK && esp_http_client_write(c, body, blen) == blen &&
         esp_http_client_fetch_headers(c) >= 0) {
         conn_ok = true;
         int status = esp_http_client_get_status_code(c);
         if (status == 200) {
-            s_speaking = true;
-            s_hush = false;
-            audio_stream_begin();
-            started = true;
-            uint8_t *buf = heap_caps_malloc(4097, MALLOC_CAP_SPIRAM);
-            bool have_odd = false;
-            uint8_t odd = 0;
-            int n;
-            int64_t dl = now_ms() + 18000;
-            while (buf && !s_hush && now_ms() < dl && (n = esp_http_client_read(c, (char *)buf + 1, 4096)) > 0) {
-                uint8_t *p = buf + 1;
-                if (have_odd) { p = buf; p[0] = odd; n++; have_odd = false; }
-                if (n & 1) { odd = p[n - 1]; have_odd = true; n--; }
-                if (n) audio_stream_push(p, n);
+            size_t cap = 96 * 1024;
+            size_t len = 0;
+            uint8_t *pcm = heap_caps_malloc(cap, MALLOC_CAP_SPIRAM);
+            int64_t dl = now_ms() + 45000;
+            int eagain_n = 0;
+            while (pcm && !s_hush && now_ms() < dl && len < TTS_PCM_MAX) {
+                if (len + 8192 > cap) {
+                    size_t ncap = cap * 2;
+                    if (ncap > TTS_PCM_MAX) ncap = TTS_PCM_MAX;
+                    if (ncap <= cap) break;
+                    uint8_t *np = heap_caps_realloc(pcm, ncap, MALLOC_CAP_SPIRAM);
+                    if (!np) break;
+                    pcm = np;
+                    cap = ncap;
+                }
+                size_t want = cap - len;
+                if (want > 8192) want = 8192;
+                int n = esp_http_client_read(c, (char *)pcm + len, (int)want);
+                if (n > 0) {
+                    len += (size_t)n;
+                    eagain_n = 0;
+                } else if (n == -ESP_ERR_HTTP_EAGAIN && ++eagain_n <= 8) {
+                    vTaskDelay(pdMS_TO_TICKS(15));
+                } else {
+                    break;
+                }
             }
-            free(buf);
-            audio_stream_end();
+            if (!esp_http_client_is_complete_data_received(c) && !s_hush) {
+                ESP_LOGW(TAG, "TTS incomplete read (%u bytes)", (unsigned)len);
+            }
+            len &= ~(size_t)1;
+            if (pcm && len >= 2 && !s_hush) {
+                *out_pcm = pcm;
+                *out_len = len;
+                ok = true;
+            } else {
+                free(pcm);
+            }
         } else {
             http_result_t r = {0};
             read_all(c, &r, 8000);
@@ -505,11 +544,57 @@ static void speak(const sphere_settings_t *s, const char *text)
     esp_http_client_close(c);
     esp_http_client_cleanup(c);
     free(body);
-    if (!started) { s_speaking = false; return; }
-    /* wait for the speaker to finish (or a tap to hush), bounded to 25 s */
-    int64_t until = now_ms() + 25000;
-    while (!s_hush && audio_is_playing() && now_ms() < until) vTaskDelay(pdMS_TO_TICKS(50));
-    if (audio_is_playing()) audio_stop();
+    return ok;
+}
+
+/* Sentence-pipelined PSRAM-buffered Deepgram TTS: sentence 0 buffers completely before playback starts,
+ * then sentence N+1 downloads into PSRAM while sentence N plays smoothly from the 2 MB stream buffer. */
+static void speak(const sphere_settings_t *s, const char *text)
+{
+    if (!text || !text[0]) return;
+    const char *starts[6];
+    size_t lens[6];
+    int n_segs = au_split_sentences(text, starts, lens, 6);
+    if (n_segs <= 0) return;
+
+    s_hush = false;
+    s_speaking = true;
+    net_set_wifi_ps(true);    /* WIFI_PS_NONE while fetching/speaking */
+
+    bool started = false;
+    size_t total_pcm_bytes = 0;
+    char seg[REPLY_MAX];
+
+    for (int i = 0; i < n_segs && !s_hush; i++) {
+        size_t slen = lens[i] < sizeof(seg) - 1 ? lens[i] : sizeof(seg) - 1;
+        memcpy(seg, starts[i], slen);
+        seg[slen] = 0;
+
+        uint8_t *pcm = NULL;
+        size_t pcm_len = 0;
+        if (!tts_fetch_pcm(s, seg, &pcm, &pcm_len)) {
+            if (pcm) free(pcm);
+            break;
+        }
+        if (!started) {
+            audio_stream_begin();
+            started = true;
+        }
+        audio_stream_push(pcm, pcm_len);
+        total_pcm_bytes += pcm_len;
+        free(pcm);
+    }
+
+    if (started) {
+        audio_stream_end();
+        uint64_t audio_ms = ((uint64_t)total_pcm_bytes * 1000ULL) / (AUDIO_SAMPLE_RATE * 2);
+        uint64_t wait_ms = audio_ms + 10000ULL;
+        if (wait_ms > 95000ULL) wait_ms = 95000ULL;
+        int64_t until = now_ms() + (int64_t)wait_ms;
+        while (!s_hush && audio_is_playing() && now_ms() < until) vTaskDelay(pdMS_TO_TICKS(50));
+        if (audio_is_playing()) audio_stop();
+    }
+    net_set_wifi_ps(false);
     s_speaking = false;
 }
 

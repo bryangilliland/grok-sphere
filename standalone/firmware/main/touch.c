@@ -56,7 +56,7 @@ static void touch_task(void *arg)
         } else if (!down && was_down) {
             if (holding) {
                 if (s_cb) s_cb(TOUCH_EVT_HOLD_END);
-            } else if (now - down_at > 30) {
+            } else if (now - down_at >= 15) {
                 if (s_cb) s_cb(TOUCH_EVT_TAP);
             }
             holding = false;
