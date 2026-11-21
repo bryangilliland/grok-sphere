@@ -1,0 +1,3 @@
+Optional: drop a custom openWakeWord model named hey_thad.onnx here.
+If no .onnx file is here, Thad Companion automatically uses its built-in
+VAD + Whisper "Hey Thad" detector (plus touch-and-hold push-to-talk on the sphere).
