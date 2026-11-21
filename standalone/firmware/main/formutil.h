@@ -21,11 +21,20 @@ typedef struct {
     bool mirror_x;
     bool wake_enabled;
     const char *wake_word;
+    bool chime_enabled;
     const char *const *scan_ssids;
     int scan_n;
     const char *last_q;          /* last question / answer (may be NULL) */
     const char *last_a;
     const char *notice;          /* one-line banner, e.g. "Saved." (may be NULL) */
+    /* Runtime diagnostics (never includes keys or passwords). */
+    const char *diag_err;
+    unsigned int diag_mic_peak;
+    unsigned int diag_mic_rms;
+    int diag_rssi;               /* 0 if disconnected */
+    unsigned int diag_free_heap;
+    unsigned int diag_free_int;
+    const char *diag_wake;
 } setup_page_info_t;
 
 /* Build the phone-friendly setup page. Returns bytes written (excl. NUL) or -1 if too small. */

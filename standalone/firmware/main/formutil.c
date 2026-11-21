@@ -183,6 +183,10 @@ int net_setup_page_build(char *out, size_t cap, const setup_page_info_t *in)
     }
     A("</select><small>Say the wake word to start talking without tapping (runs offline on the sphere). "
       "\"Hi, ESP\" and \"Alexa\" are trained on real voices; \"Jarvis\" and \"Computer\" are synthetic.</small>");
+    A(in->chime_enabled
+      ? "<label class=cb><input type=checkbox name=chime value=1 checked>Chime when listening starts</label>"
+      : "<label class=cb><input type=checkbox name=chime value=1>Chime when listening starts</label>");
+    A("<small>Off by default (cyan eyes show when it is listening).</small>");
 
     A("<h2>3. Home Wi-Fi</h2><label>Wi-Fi name</label><input name=ssid list=nets autocomplete=off autocapitalize=off value=\"");
     E(in->ssid);
@@ -198,6 +202,35 @@ int net_setup_page_build(char *out, size_t cap, const setup_page_info_t *in)
     A(in->mirror_x ? "<label class=cb><input type=checkbox name=mirror value=1 checked>Flip the screen (only if text looks mirrored)</label>"
                    : "<label class=cb><input type=checkbox name=mirror value=1>Flip the screen (only if text looks mirrored)</label>");
     A("<button type=submit>Save</button></form>");
+
+    A("<h2>Diagnostics</h2><div class=card>");
+    A("<small>Last error</small>");
+    E((in->diag_err && in->diag_err[0]) ? in->diag_err : "None");
+    A("<small>Wake word</small>");
+    E((in->diag_wake && in->diag_wake[0]) ? in->diag_wake : (in->wake_enabled ? "enabled" : "off"));
+    snprintf(line, sizeof(line), "<small>Last mic level</small>peak %u / rms %u",
+             in->diag_mic_peak, in->diag_mic_rms);
+    A(line);
+    A("<small>Last transcript</small>");
+    E((in->last_q && in->last_q[0]) ? in->last_q : "(none yet)");
+    A("<small>Last Claude reply</small>");
+    if (in->last_a && in->last_a[0]) {
+        char snip[165];
+        snprintf(snip, sizeof(snip), "%.156s%s", in->last_a, strlen(in->last_a) > 156 ? "..." : "");
+        E(snip);
+    } else {
+        A("(none yet)");
+    }
+    if (in->diag_rssi < 0) snprintf(line, sizeof(line), "<small>Wi-Fi RSSI</small>%d dBm", in->diag_rssi);
+    else snprintf(line, sizeof(line), "<small>Wi-Fi RSSI</small>%s", in->wifi_connected ? "connected" : "not connected");
+    A(line);
+    snprintf(line, sizeof(line), "<small>Free heap</small>%u KB (internal %u KB)",
+             in->diag_free_heap / 1024, in->diag_free_int / 1024);
+    A(line);
+    A("</div>");
+
+    A("<form method=post action=/moods><button class=preview type=submit>Preview moods</button></form>"
+      "<small>Cycles through happy, curious, surprised, sad, bored and sleepy eyes on the sphere.</small>");
 
     A("<h2>Using it</h2><small>Say the wake word, or tap the screen / press BOOT, and talk; it stops when you pause. "
       "Tap again to stop early or to cut Thad off. Touch and hold for the clock. "

@@ -7,6 +7,7 @@ void net_init(void);
 bool net_connect_sta(const sphere_settings_t *s, int timeout_ms);
 bool net_is_connected(void);
 const char *net_ip_str(void);         /* home-network IP or "" */
+int net_wifi_rssi(void);              /* dBm (negative) or 0 if not connected */
 /* Web setup page: http://<ip>/ on the home network and http://192.168.4.1/ on the hotspot. */
 void net_http_start(void);
 /* Setup hotspot (+ captive DNS). Shows the QR screen. */

@@ -2,9 +2,11 @@
  * Grok Sphere (Standalone Claude Edition) - LVGL 8.3 screens.
  *
  *   Eyes screen: the original two rounded "eyes" from firmware 1.0 / v2 (the look
- *     taken from @Texas_Twins_Dad's X post that started this project):
- *       idle = off-white + random blink, listening = wide cyan, thinking = squint + bouncing dots,
- *       speaking = height pulses with the speaker level, error = red, offline = dim grey.
+ *     taken from @Texas_Twins_Dad's X post that started this project), with subtle
+ *     emotional capsule expressions (happy, sad, bored, sleepy, surprised, curious)
+ *     and natural blinks / idle glances.
+ *       idle = off-white + blink/glance, listening = wide cyan, thinking = squint + dots,
+ *       speaking = height pulses with speaker level, error = red + sad brow, offline = dim grey.
  *   Clock screen: time, date, Fort Worth weather (filled in by weather.c / SNTP).
  *   Setup / Notice screen: QR code hotspot setup or full-screen USB flash notice.
  */
@@ -19,13 +21,16 @@
 #include "esp_timer.h"
 #include "lvgl.h"
 
-#define EYE_W        74
-#define EYE_H        120
-#define EYE_DX       62
-#define EYE_CY       160
+#define EYE_W            74
+#define EYE_H            120
+#define EYE_DX           62
+#define EYE_CY           160
+#define IDLE_BORED_MS    (2 * 60 * 1000)
+#define IDLE_SLEEPY_MS   (10 * 60 * 1000)
+#define PREVIEW_STEP_MS  1500
 
 static lv_obj_t *s_scr_eyes, *s_scr_clock, *s_scr_setup;
-static lv_obj_t *s_eye[2], *s_dot[3], *s_status;
+static lv_obj_t *s_eye[2], *s_lid[2], *s_dot[3], *s_status, *s_zzz;
 static lv_obj_t *s_reply_box, *s_reply;
 static int s_reply_y, s_reply_pause;
 static int64_t s_reply_hide_at;
@@ -36,31 +41,93 @@ static char s_setup_qr_str[128], s_setup_txt_str[180];
 static bool s_notice, s_notice_over_setup;
 static ui_state_t s_state = UI_STATE_OFFLINE;
 static ui_screen_t s_screen = SCREEN_EYES;
-static bool s_setup_active;
+static ui_mood_t s_mood = UI_MOOD_NONE;
+static bool s_setup_active, s_preview_active;
 static int64_t s_next_blink_ms, s_blink_start_ms = -1, s_state_since_ms;
+static int64_t s_last_activity_ms, s_mood_until_ms, s_preview_start_ms;
+static int64_t s_next_glance_ms, s_glance_end_ms;
+static float s_glance_tx, s_glance_ty;
+static float s_cur_w[2] = {EYE_W, EYE_W}, s_cur_h[2] = {36, 36};
+static float s_cur_cx[2] = {180 - EYE_DX, 180 + EYE_DX}, s_cur_cy[2] = {EYE_CY, EYE_CY};
 static float s_speak_h = 70;
 static char s_label[32];
 
 static int64_t now_ms(void) { return esp_timer_get_time() / 1000; }
 
-static lv_color_t state_color(ui_state_t s)
+static lv_color_t state_color(ui_state_t s, ui_mood_t mood)
 {
     switch (s) {
     case UI_STATE_LISTENING: return lv_color_hex(0x3DDCFF);
     case UI_STATE_THINKING:  return lv_color_hex(0x9AA7FF);
     case UI_STATE_ERROR:     return lv_color_hex(0xFF3B30);
     case UI_STATE_OFFLINE:   return lv_color_hex(0x4A4F57);
-    default:                 return lv_color_hex(0xEAF2FF);
+    default:
+        if (mood == UI_MOOD_SAD)    return lv_color_hex(0xA8C8FF);
+        if (mood == UI_MOOD_SLEEPY) return lv_color_hex(0x9AA6BA);
+        if (mood == UI_MOOD_BORED)  return lv_color_hex(0xCFD8E6);
+        return lv_color_hex(0xEAF2FF);
     }
 }
 
-static void place_eye(int i, int w, int h, int cy)
+static void place_eye_geom(int i, int w, int h, int cx, int cy, int angle_01deg)
 {
+    if (w < 8) w = 8;
     if (h < 6) h = 6;
     lv_obj_set_size(s_eye[i], w, h);
     lv_obj_set_style_radius(s_eye[i], w / 2, 0);
-    int cx = 180 + (i == 0 ? -EYE_DX : EYE_DX);
     lv_obj_set_pos(s_eye[i], cx - w / 2, cy - h / 2);
+    lv_obj_set_style_transform_pivot_x(s_eye[i], w / 2, 0);
+    lv_obj_set_style_transform_pivot_y(s_eye[i], h / 2, 0);
+    lv_obj_set_style_transform_angle(s_eye[i], angle_01deg, 0);
+}
+
+static void place_lid(int i, bool show, int x, int y, int w, int h, int radius, int angle_01deg)
+{
+    if (!show || h <= 0) {
+        lv_obj_add_flag(s_lid[i], LV_OBJ_FLAG_HIDDEN);
+        return;
+    }
+    lv_obj_clear_flag(s_lid[i], LV_OBJ_FLAG_HIDDEN);
+    lv_obj_set_size(s_lid[i], w, h);
+    lv_obj_set_style_radius(s_lid[i], radius, 0);
+    lv_obj_set_pos(s_lid[i], x, y);
+    lv_obj_set_style_transform_pivot_x(s_lid[i], w / 2, 0);
+    lv_obj_set_style_transform_pivot_y(s_lid[i], h / 2, 0);
+    lv_obj_set_style_transform_angle(s_lid[i], angle_01deg, 0);
+}
+
+static ui_mood_t effective_mood(int64_t now, const char **preview_label)
+{
+    if (preview_label) *preview_label = NULL;
+    if (s_preview_active) {
+        static const struct { ui_mood_t m; const char *name; } seq[] = {
+            { UI_MOOD_HAPPY,     "Happy" },
+            { UI_MOOD_CURIOUS,   "Curious" },
+            { UI_MOOD_SURPRISED, "Surprised" },
+            { UI_MOOD_SAD,       "Sad" },
+            { UI_MOOD_BORED,     "Bored" },
+            { UI_MOOD_SLEEPY,    "Sleepy" },
+        };
+        int idx = (int)((now - s_preview_start_ms) / PREVIEW_STEP_MS);
+        if (idx >= 0 && idx < (int)(sizeof(seq) / sizeof(seq[0]))) {
+            if (preview_label) *preview_label = seq[idx].name;
+            return seq[idx].m;
+        }
+        s_preview_active = false;
+        s_mood = UI_MOOD_NONE;
+        lv_label_set_text(s_status, "");
+    }
+    if (s_mood != UI_MOOD_NONE && s_mood_until_ms > 0 && now >= s_mood_until_ms) {
+        s_mood = UI_MOOD_NONE;
+        s_mood_until_ms = 0;
+    }
+    if (s_mood != UI_MOOD_NONE) return s_mood;
+    if (s_state == UI_STATE_IDLE) {
+        int64_t idle_ms = now - s_last_activity_ms;
+        if (idle_ms >= IDLE_SLEEPY_MS) return UI_MOOD_SLEEPY;
+        if (idle_ms >= IDLE_BORED_MS)  return UI_MOOD_BORED;
+    }
+    return UI_MOOD_NONE;
 }
 
 static void anim_tick(lv_timer_t *t)
@@ -69,48 +136,192 @@ static void anim_tick(lv_timer_t *t)
     if (lv_scr_act() != s_scr_eyes) return;
     int64_t now = now_ms();
     float sec = (now - s_state_since_ms) / 1000.0f;
-    int w = EYE_W, h = EYE_H, cy = EYE_CY;
-    bool dots = false;
 
-    switch (s_state) {
-    case UI_STATE_IDLE: {
+    const char *prev_lbl = NULL;
+    ui_mood_t mood = effective_mood(now, &prev_lbl);
+    if (prev_lbl) lv_label_set_text(s_status, prev_lbl);
+
+    lv_color_t col = state_color(s_state, mood);
+    for (int i = 0; i < 2; i++) lv_obj_set_style_bg_color(s_eye[i], col, 0);
+
+    float tw[2] = {EYE_W, EYE_W}, th[2] = {EYE_H, EYE_H};
+    float tcx[2] = {180.0f - EYE_DX, 180.0f + EYE_DX}, tcy[2] = {EYE_CY, EYE_CY};
+    int eye_ang[2] = {0, 0};
+    bool dots = false, show_zzz = false;
+    bool lid_show[2] = {false, false};
+    int lid_x[2] = {0}, lid_y[2] = {0}, lid_w[2] = {0}, lid_h[2] = {0}, lid_r[2] = {0}, lid_a[2] = {0};
+
+    /* Natural random blink helper (shared across neutral / bored / curious) */
+    float blink_scale = 1.0f;
+    if ((s_state == UI_STATE_IDLE || s_state == UI_STATE_SPEAKING) &&
+        mood != UI_MOOD_HAPPY && mood != UI_MOOD_SLEEPY) {
         if (s_blink_start_ms < 0 && now >= s_next_blink_ms) s_blink_start_ms = now;
         if (s_blink_start_ms >= 0) {
-            float p = (now - s_blink_start_ms) / 180.0f;           /* 180 ms blink */
+            float p = (now - s_blink_start_ms) / 180.0f;
             if (p >= 1.0f) {
                 s_blink_start_ms = -1;
-                s_next_blink_ms = now + 2500 + (esp_random() % 3500);
+                s_next_blink_ms = now + 2600 + (esp_random() % 3600);
             } else {
-                h = (int)(EYE_H * fabsf(1.0f - 2.0f * p));
+                blink_scale = fabsf(1.0f - 2.0f * p);
             }
         }
-        break;
     }
+
+    /* Small natural idle glances when neutral idle */
+    if (s_state == UI_STATE_IDLE && mood == UI_MOOD_NONE) {
+        if (now >= s_glance_end_ms) {
+            s_glance_tx = 0;
+            s_glance_ty = 0;
+        }
+        if (now >= s_next_glance_ms) {
+            int r = (int)(esp_random() % 3);
+            s_glance_tx = (r == 0) ? -9.0f : (r == 1 ? 9.0f : 0.0f);
+            s_glance_ty = ((int)(esp_random() % 3) - 1) * 3.0f;
+            s_glance_end_ms = now + 1300;
+            s_next_glance_ms = now + 4500 + (esp_random() % 4500);
+        }
+        tcx[0] += s_glance_tx; tcx[1] += s_glance_tx;
+        tcy[0] += s_glance_ty; tcy[1] += s_glance_ty;
+    }
+
+    switch (s_state) {
     case UI_STATE_LISTENING:
-        w = 84;
-        h = 140 + (int)(6 * sinf(sec * 6.0f));
+        if (mood == UI_MOOD_SURPRISED) {
+            tw[0] = tw[1] = 88;
+            th[0] = th[1] = 148 + 4 * sinf(sec * 7.0f);
+            tcy[0] = tcy[1] = EYE_CY - 8;
+        } else {
+            tw[0] = tw[1] = 84;
+            th[0] = th[1] = 140 + 6 * sinf(sec * 6.0f);
+        }
         break;
     case UI_STATE_THINKING:
-        h = 56;
-        cy = EYE_CY - 18;
+        tw[0] = 78; th[0] = 66; tcy[0] = EYE_CY - 22;
+        tw[1] = 68; th[1] = 48; tcy[1] = EYE_CY - 16;
         dots = true;
         break;
     case UI_STATE_SPEAKING: {
         float target = 64 + audio_level() * 0.9f;
         s_speak_h += (target - s_speak_h) * 0.45f;
-        h = (int)s_speak_h;
+        th[0] = th[1] = s_speak_h;
+        if (mood == UI_MOOD_CURIOUS) {
+            tw[0] = 80; th[0] = fmaxf(s_speak_h * 1.12f, 76); tcy[0] = EYE_CY - 6;
+            tw[1] = 68; th[1] = fmaxf(s_speak_h * 0.80f, 54); tcy[1] = EYE_CY + 4;
+            eye_ang[0] = -40; eye_ang[1] = 40;
+        } else if (mood == UI_MOOD_HAPPY) {
+            tw[0] = tw[1] = 78;
+            th[0] = th[1] = fmaxf(s_speak_h * 0.85f, 78);
+            tcy[0] = tcy[1] = EYE_CY - 4;
+            for (int i = 0; i < 2; i++) {
+                lid_show[i] = true;
+                lid_w[i] = 94; lid_h[i] = 66; lid_r[i] = 47;
+                lid_x[i] = (int)s_cur_cx[i] - 47;
+                lid_y[i] = (int)s_cur_cy[i] + 10;
+            }
+        }
         break;
     }
     case UI_STATE_ERROR:
-        h = 90;
+        tw[0] = tw[1] = 72;
+        th[0] = th[1] = 88;
+        tcy[0] = tcy[1] = EYE_CY + 8;
+        for (int i = 0; i < 2; i++) {
+            lid_show[i] = true;
+            lid_w[i] = 108; lid_h[i] = 52; lid_r[i] = 0;
+            lid_x[i] = (int)s_cur_cx[i] - 54 + (i == 0 ? -8 : 8);
+            lid_y[i] = (int)s_cur_cy[i] - 56;
+            lid_a[i] = (i == 0) ? -200 : 200;
+        }
         break;
     case UI_STATE_OFFLINE:
+        th[0] = th[1] = 36;
+        break;
+    case UI_STATE_IDLE:
     default:
-        h = 36;
+        switch (mood) {
+        case UI_MOOD_HAPPY:
+            tw[0] = tw[1] = 78;
+            th[0] = th[1] = 86;
+            tcy[0] = tcy[1] = EYE_CY - 6 + 3 * sinf(sec * 4.0f);
+            for (int i = 0; i < 2; i++) {
+                lid_show[i] = true;
+                lid_w[i] = 96; lid_h[i] = 76; lid_r[i] = 48;
+                lid_x[i] = (int)s_cur_cx[i] - 48;
+                lid_y[i] = (int)s_cur_cy[i] - 2;
+            }
+            break;
+        case UI_MOOD_SAD:
+            tw[0] = tw[1] = 72;
+            th[0] = th[1] = 88;
+            tcy[0] = tcy[1] = EYE_CY + 8;
+            for (int i = 0; i < 2; i++) {
+                lid_show[i] = true;
+                lid_w[i] = 108; lid_h[i] = 52; lid_r[i] = 0;
+                lid_x[i] = (int)s_cur_cx[i] - 54 + (i == 0 ? -8 : 8);
+                lid_y[i] = (int)s_cur_cy[i] - 56;
+                lid_a[i] = (i == 0) ? -200 : 200;
+            }
+            break;
+        case UI_MOOD_BORED: {
+            float gx = 10.0f * sinf(sec * 0.75f);
+            tw[0] = tw[1] = 76;
+            th[0] = th[1] = 106;
+            tcx[0] += gx; tcx[1] += gx;
+            for (int i = 0; i < 2; i++) {
+                lid_show[i] = true;
+                lid_w[i] = 96; lid_h[i] = 56; lid_r[i] = 0;
+                lid_x[i] = (int)s_cur_cx[i] - 48;
+                lid_y[i] = (int)s_cur_cy[i] - 58;
+            }
+            break;
+        }
+        case UI_MOOD_SLEEPY: {
+            float cyc = 0.5f + 0.5f * sinf(sec * 1.1f);
+            int lh = 56 + (int)(36.0f * cyc);          /* slowly closes down to ~14 px slit */
+            tw[0] = tw[1] = 76;
+            th[0] = th[1] = 104;
+            tcy[0] = tcy[1] = EYE_CY + 6;
+            for (int i = 0; i < 2; i++) {
+                lid_show[i] = true;
+                lid_w[i] = 96; lid_h[i] = lh; lid_r[i] = 0;
+                lid_x[i] = (int)s_cur_cx[i] - 48;
+                lid_y[i] = (int)s_cur_cy[i] - 54;
+            }
+            if (lh >= 70) {
+                show_zzz = true;
+                int drift = (int)(8.0f * sinf(sec * 1.6f));
+                lv_obj_set_pos(s_zzz, 250, 96 - drift);
+            }
+            break;
+        }
+        case UI_MOOD_SURPRISED:
+            tw[0] = tw[1] = 88;
+            th[0] = th[1] = 148 + 3 * sinf(sec * 8.0f);
+            tcy[0] = tcy[1] = EYE_CY - 10;
+            break;
+        case UI_MOOD_CURIOUS:
+            tw[0] = 82; th[0] = 134; tcy[0] = EYE_CY - 8;  eye_ang[0] = -40;
+            tw[1] = 68; th[1] = 84;  tcy[1] = EYE_CY + 6;  eye_ang[1] = 40;
+            break;
+        case UI_MOOD_NONE:
+        default:
+            break;
+        }
         break;
     }
-    place_eye(0, w, h, cy);
-    place_eye(1, w, h, cy);
+
+    float alpha = (s_blink_start_ms >= 0) ? 0.65f : 0.34f;
+    for (int i = 0; i < 2; i++) {
+        float h_target = th[i] * blink_scale;
+        if (s_blink_start_ms >= 0 && lid_show[i]) h_target = th[i];
+        s_cur_w[i]  += (tw[i]  - s_cur_w[i])  * alpha;
+        s_cur_h[i]  += (h_target - s_cur_h[i]) * alpha;
+        s_cur_cx[i] += (tcx[i] - s_cur_cx[i]) * alpha;
+        s_cur_cy[i] += (tcy[i] - s_cur_cy[i]) * alpha;
+        place_eye_geom(i, (int)lroundf(s_cur_w[i]), (int)lroundf(s_cur_h[i]),
+                       (int)lroundf(s_cur_cx[i]), (int)lroundf(s_cur_cy[i]), eye_ang[i]);
+        place_lid(i, lid_show[i], lid_x[i], lid_y[i], lid_w[i], lid_h[i], lid_r[i], lid_a[i]);
+    }
     for (int i = 0; i < 3; i++) {
         if (dots) {
             lv_obj_clear_flag(s_dot[i], LV_OBJ_FLAG_HIDDEN);
@@ -120,6 +331,8 @@ static void anim_tick(lv_timer_t *t)
             lv_obj_add_flag(s_dot[i], LV_OBJ_FLAG_HIDDEN);
         }
     }
+    if (show_zzz) lv_obj_clear_flag(s_zzz, LV_OBJ_FLAG_HIDDEN);
+    else lv_obj_add_flag(s_zzz, LV_OBJ_FLAG_HIDDEN);
 }
 
 static void clock_tick(lv_timer_t *t)
@@ -195,10 +408,22 @@ void ui_init(void)
         s_eye[i] = lv_obj_create(s_scr_eyes);
         lv_obj_set_style_border_width(s_eye[i], 0, 0);
         lv_obj_set_style_bg_opa(s_eye[i], LV_OPA_COVER, 0);
-        lv_obj_set_style_bg_color(s_eye[i], state_color(s_state), 0);
+        lv_obj_set_style_bg_color(s_eye[i], state_color(s_state, UI_MOOD_NONE), 0);
         lv_obj_clear_flag(s_eye[i], LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
-        place_eye(i, EYE_W, 36, EYE_CY);
+        place_eye_geom(i, EYE_W, 36, 180 + (i == 0 ? -EYE_DX : EYE_DX), EYE_CY, 0);
+
+        s_lid[i] = lv_obj_create(s_scr_eyes);
+        lv_obj_set_style_border_width(s_lid[i], 0, 0);
+        lv_obj_set_style_bg_opa(s_lid[i], LV_OPA_COVER, 0);
+        lv_obj_set_style_bg_color(s_lid[i], lv_color_black(), 0);
+        lv_obj_clear_flag(s_lid[i], LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_flag(s_lid[i], LV_OBJ_FLAG_HIDDEN);
     }
+    s_zzz = lv_label_create(s_scr_eyes);
+    lv_obj_set_style_text_font(s_zzz, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(s_zzz, lv_color_hex(0x8A93A3), 0);
+    lv_label_set_text(s_zzz, "z Z");
+    lv_obj_add_flag(s_zzz, LV_OBJ_FLAG_HIDDEN);
     for (int i = 0; i < 3; i++) {
         s_dot[i] = lv_obj_create(s_scr_eyes);
         lv_obj_set_size(s_dot[i], 16, 16);
@@ -250,7 +475,9 @@ void ui_init(void)
     lv_timer_create(reply_tick, 40, NULL);
     lv_timer_create(clock_tick, 1000, NULL);
     s_state_since_ms = now_ms();
+    s_last_activity_ms = s_state_since_ms;
     s_next_blink_ms = s_state_since_ms + 3000;
+    s_next_glance_ms = s_state_since_ms + 5000;
     lv_scr_load(s_scr_eyes);
     display_unlock();
 }
@@ -267,15 +494,63 @@ static void refresh_status_text(const char *text)
 void ui_set_state(ui_state_t state, const char *label, const char *text)
 {
     display_lock(-1);
-    if (state != s_state) s_state_since_ms = now_ms();
+    int64_t now = now_ms();
+    if (state != s_state) s_state_since_ms = now;
+    if (state != UI_STATE_IDLE) {
+        s_preview_active = false;
+        s_last_activity_ms = now;
+        if (state == UI_STATE_LISTENING || state == UI_STATE_ERROR) {
+            /* preserve surprised on wake if just set, or clear stale mood */
+            if (state == UI_STATE_ERROR) s_mood = UI_MOOD_SAD;
+        }
+    }
     s_state = state;
     snprintf(s_label, sizeof(s_label), "%s", label ? label : "");
-    for (int i = 0; i < 2; i++) lv_obj_set_style_bg_color(s_eye[i], state_color(state), 0);
+    for (int i = 0; i < 2; i++) lv_obj_set_style_bg_color(s_eye[i], state_color(state, s_mood), 0);
     refresh_status_text(text);
     if (state != UI_STATE_IDLE && state != UI_STATE_OFFLINE && !s_setup_active && !s_notice) {
         s_screen = SCREEN_EYES;
         lv_scr_load(s_scr_eyes);
     }
+    display_unlock();
+}
+
+void ui_set_mood(ui_mood_t mood, int duration_ms)
+{
+    display_lock(-1);
+    int64_t now = now_ms();
+    s_preview_active = false;
+    s_mood = mood;
+    s_mood_until_ms = (duration_ms > 0) ? (now + duration_ms) : 0;
+    s_last_activity_ms = now;
+    for (int i = 0; i < 2; i++) lv_obj_set_style_bg_color(s_eye[i], state_color(s_state, s_mood), 0);
+    display_unlock();
+}
+
+void ui_preview_moods(void)
+{
+    display_lock(-1);
+    int64_t now = now_ms();
+    s_state = UI_STATE_IDLE;
+    s_mood = UI_MOOD_NONE;
+    s_mood_until_ms = 0;
+    s_last_activity_ms = now;
+    s_preview_start_ms = now;
+    s_preview_active = true;
+    lv_obj_add_flag(s_reply_box, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(s_status, LV_OBJ_FLAG_HIDDEN);
+    if (!s_setup_active && !s_notice) {
+        s_screen = SCREEN_EYES;
+        lv_scr_load(s_scr_eyes);
+    }
+    display_unlock();
+}
+
+void ui_wake_activity(void)
+{
+    display_lock(-1);
+    s_last_activity_ms = now_ms();
+    s_preview_active = false;
     display_unlock();
 }
 
@@ -341,6 +616,7 @@ void ui_show_screen(ui_screen_t screen)
 
 void ui_toggle_screen(void)
 {
+    ui_wake_activity();
     ui_show_screen(s_screen == SCREEN_EYES ? SCREEN_CLOCK : SCREEN_EYES);
 }
 
