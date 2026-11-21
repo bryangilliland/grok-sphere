@@ -8,7 +8,7 @@ int main(int argc, char **argv)
     const char *scans[] = { "Gilliland-Home", "Gilliland-Guest", "NETGEAR42" };
     setup_page_info_t in = {
         .ssid = "Gilliland-Home", .wifi_connected = argc > 2, .ip = "192.168.1.50",
-        .api_key_masked = argc > 2 ? "****9xQz" : "", .speech_key_masked = "", .model = 0,
+        .api_key_masked = argc > 2 ? "****9xQz" : "", .speech_key_masked = argc > 2 ? "****k7mQ" : "", .model = 0,
         .voice = AU_DEFAULT_VOICE, .volume = 70, .scan_ssids = scans, .scan_n = 3,
         .last_q = argc > 2 ? "What should I grill tonight?" : NULL,
         .last_a = argc > 2 ? "Ribeyes. It's 68 and clear in Fort Worth - perfect grilling weather." : NULL,
