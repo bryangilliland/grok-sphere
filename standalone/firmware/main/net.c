@@ -186,7 +186,7 @@ static esp_err_t send_page(httpd_req_t *req, const char *notice)
         .ssid = s.ssid, .wifi_connected = net_is_connected(), .ip = net_ip_str(),
         .api_key_masked = akm, .speech_key_masked = dkm, .model = s.model, .voice = s.voice,
         .volume = s.volume, .mirror_x = s.mirror_x, .wake_enabled = s.wake_enabled, .wake_word = s.wake_word,
-        .chime_enabled = s.chime_enabled, .location = s.location, .scan_ssids = scans, .scan_n = nscan,
+        .chime_enabled = s.chime_enabled, .web_search_enabled = s.web_search, .location = s.location, .scan_ssids = scans, .scan_n = nscan,
         .last_q = diag->last_q, .last_a = diag->last_a, .notice = notice,
         .diag_err = diag->last_err, .diag_mic_peak = diag->mic_peak, .diag_mic_rms = diag->mic_rms,
         .diag_noise_floor = diag->noise_floor, .diag_speech_detected = diag->speech_detected,
@@ -194,7 +194,7 @@ static esp_err_t send_page(httpd_req_t *req, const char *notice)
         .diag_rssi = net_wifi_rssi(), .diag_free_heap = (unsigned)esp_get_free_heap_size(),
         .diag_free_int = (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
         .diag_min_free_int = (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
-        .diag_wake = diag->wake_active,
+        .diag_wake = diag->wake_active, .diag_web_searches = (unsigned)diag->last_web_searches,
     };
     int n = net_setup_page_build(page, PAGE_MAX, &info);
     free(diag);
@@ -254,6 +254,7 @@ static esp_err_t h_save(httpd_req_t *req)
     s.wake_enabled = net_form_get(body, "wakeon", tmp, sizeof(tmp));
     if (net_form_get(body, "wake", tmp, sizeof(tmp)) && au_wake_valid(tmp)) strcpy(s.wake_word, tmp);
     s.chime_enabled = net_form_get(body, "chime", tmp, sizeof(tmp));
+    s.web_search = net_form_get(body, "webon", tmp, sizeof(tmp));
     if (net_form_get(body, "loc", tmp, sizeof(s.location))) {
         au_trim(tmp);
         if (tmp[0]) snprintf(s.location, sizeof(s.location), "%.63s", tmp);

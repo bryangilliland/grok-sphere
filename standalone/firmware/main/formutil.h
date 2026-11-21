@@ -22,6 +22,7 @@ typedef struct {
     bool wake_enabled;
     const char *wake_word;
     bool chime_enabled;
+    bool web_search_enabled;
     const char *location;
     const char *const *scan_ssids;
     int scan_n;
@@ -40,6 +41,7 @@ typedef struct {
     unsigned int diag_free_int;
     unsigned int diag_min_free_int;
     const char *diag_wake;
+    unsigned int diag_web_searches;
 } setup_page_info_t;
 
 /* Build the phone-friendly setup page. Returns bytes written (excl. NUL) or -1 if too small. */

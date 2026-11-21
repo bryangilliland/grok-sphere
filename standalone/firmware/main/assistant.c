@@ -42,7 +42,7 @@ extern const uint8_t srmodels_bin_start[] asm("_binary_srmodels_bin_start");
 #define REC_FRAME_SAMPLES 480                        /* 30 ms (matches esp-sr VAD) */
 #define PRE_RING_FRAMES 48                           /* ~1.5 s pre-wake/tap baseline */
 #define REC_MAX_SAMPLES (AUDIO_SAMPLE_RATE * 9)      /* 9 s */
-#define RESP_MAX        (48 * 1024)
+#define RESP_MAX        (192 * 1024)
 #define REPLY_MAX       1400
 #define SPOKEN_MAX      600
 #define HIST_TURNS      6
@@ -73,6 +73,7 @@ static size_t s_pre_head, s_pre_count;
 static int64_t s_pre_last_ms;
 static uint32_t s_snap_noise_floor;
 static volatile bool s_afe_vad_speech;
+static int s_last_web_searches;
 static char *s_hist_text[HIST_TURNS];
 static const char *s_hist_role[HIST_TURNS];
 static int s_hist_n;
@@ -155,6 +156,7 @@ void assistant_diag(assistant_diag_t *out)
     } else {
         snprintf(out->wake_active, sizeof(out->wake_active), "off");
     }
+    out->last_web_searches = s_last_web_searches;
     xSemaphoreGive(s_lock);
 }
 
@@ -222,7 +224,7 @@ static esp_http_client_handle_t open_post(const char *url, const char *ctype, in
         .method = HTTP_METHOD_POST,
         .crt_bundle_attach = esp_crt_bundle_attach,
         .timeout_ms = timeout_ms,
-        .buffer_size = 4096,
+        .buffer_size = 16384,
         .buffer_size_tx = 2048,
         .keep_alive_enable = false,
     };
@@ -409,27 +411,58 @@ static bool ask_claude(const sphere_settings_t *s, const char *question, char *r
     if (tm.tm_year >= (2024 - 1900)) strftime(tbuf, sizeof(tbuf), "%A, %B %d, %Y, %I:%M %p", &tm);
     char wbuf[240] = "";
     clock_weather_summary(wbuf, sizeof(wbuf));
-    char *system = heap_caps_malloc(1800, MALLOC_CAP_SPIRAM);
+    bool use_web = s->web_search;
+    char *system = heap_caps_malloc(2200, MALLOC_CAP_SPIRAM);
     if (!system) return false;
-    au_system_prompt(system, 1800, tbuf, wbuf);
+    au_system_prompt(system, 2200, tbuf, wbuf, use_web);
+
+    char city[48], region[48];
+    au_web_location_from_setting(s->location, city, sizeof(city), region, sizeof(region));
+    au_web_search_t web = {
+        .max_uses = AU_WEB_SEARCH_MAX_USES,
+        .city = city, .region = region, .country = "US", .timezone = "America/Chicago",
+    };
 
     au_turn_t hist[HIST_TURNS];
     for (int i = 0; i < s_hist_n; i++) { hist[i].role = s_hist_role[i]; hist[i].text = s_hist_text[i]; }
     const char *model = au_model_id(s->model);
     int mode = au_thinking_mode_for(model);
     bool ok = false;
-    for (int attempt = 0; attempt < 2 && !ok; attempt++) {
-        char *req = au_claude_request(model, 600, system, hist, s_hist_n, question, mode);
+    bool web_rejected = false;
+    int web_count = 0;
+    for (int attempt = 0; attempt < 3 && !ok; attempt++) {
+        if (attempt > 0) au_system_prompt(system, 2200, tbuf, wbuf, use_web);
+        char *req = au_claude_request(model, 600, system, hist, s_hist_n, question, mode,
+                                      use_web ? &web : NULL);
         if (!req) break;
         http_result_t r;
+        int timeout_ms = use_web ? 45000 : 20000;
         bool sent = post(ANTHROPIC_URL, "application/json", "x-api-key", s->api_key,
-                         "anthropic-version", AU_ANTHROPIC_VERSION, req, (int)strlen(req), NULL, 0, 20000, &r);
+                         "anthropic-version", AU_ANTHROPIC_VERSION, req, (int)strlen(req), NULL, 0, timeout_ms, &r);
         free(req);
         if (!sent) { free(r.body); fail("Can't reach Claude"); break; }
         char err[160];
         if (r.status == 200 && au_parse_claude(r.body, reply, cap, err, sizeof(err))) {
             ok = true;
-        } else if (r.status == 400 && mode != 0 && attempt == 0) {
+            web_count = au_claude_web_search_count(r.body);
+        } else if (r.status == 400 && use_web) {
+            au_parse_claude(r.body, reply, cap, err, sizeof(err));
+            if (au_web_search_rejected(err)) {
+                ESP_LOGW(TAG, "web search rejected; retrying without the tool");
+                use_web = false;
+                web_rejected = true;
+            } else if (mode != 0) {
+                mode = 0;
+                ESP_LOGW(TAG, "retrying without thinking settings");
+            } else {
+                char msg[200];
+                snprintf(msg, sizeof(msg), "Claude error %d: %.120s", r.status, err);
+                reply[0] = 0;
+                free(r.body);
+                fail(msg);
+                break;
+            }
+        } else if (r.status == 400 && mode != 0) {
             mode = 0;   /* model refused the thinking/effort settings: retry plain */
             ESP_LOGW(TAG, "retrying without thinking settings");
         } else {
@@ -446,10 +479,14 @@ static bool ask_claude(const sphere_settings_t *s, const char *question, char *r
         free(r.body);
     }
     free(system);
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    s_last_web_searches = web_count;
+    xSemaphoreGive(s_lock);
     if (ok) {
         hist_add("user", question);
         hist_add("assistant", reply);
         s_last_turn_ms = now_ms();
+        if (web_rejected) set_err("Web search not enabled on your Claude account");
     }
     return ok;
 }

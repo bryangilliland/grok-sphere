@@ -187,6 +187,10 @@ int net_setup_page_build(char *out, size_t cap, const setup_page_info_t *in)
       ? "<label class=cb><input type=checkbox name=chime value=1 checked>Chime when listening starts</label>"
       : "<label class=cb><input type=checkbox name=chime value=1>Chime when listening starts</label>");
     A("<small>Off by default (cyan eyes show when it is listening).</small>");
+    A(in->web_search_enabled
+      ? "<label class=cb><input type=checkbox name=webon value=1 checked>Web search</label>"
+      : "<label class=cb><input type=checkbox name=webon value=1>Web search</label>");
+    A("<small>Lets Thad look up news, scores, prices, and hours on your Claude account (about $10 per 1,000 searches). Capped at 2 searches per question. Leave on unless you want answers from the sphere's live weather/time and Claude's built-in knowledge only.</small>");
     A("<label>Weather location</label><input name=loc maxlength=63 placeholder='Fort Worth, TX' value=\"");
     E((in->location && in->location[0]) ? in->location : "Fort Worth, TX");
     A("\"><small>City name (e.g. Fort Worth, TX) or lat, lon (e.g. 32.7555, -97.3308). Used for clock &amp; Thad's live forecast.</small>");
@@ -219,6 +223,8 @@ int net_setup_page_build(char *out, size_t cap, const setup_page_info_t *in)
     snprintf(line, sizeof(line), "<small>Speech detected</small>%s", in->diag_speech_detected ? "yes" : "no");
     A(line);
     snprintf(line, sizeof(line), "<small>Recorded seconds</small>%.1f s", (double)in->diag_rec_ms / 1000.0);
+    A(line);
+    snprintf(line, sizeof(line), "<small>Last web searches</small>%u", in->diag_web_searches);
     A(line);
     A("<small>Last transcript</small>");
     E((in->last_q && in->last_q[0]) ? in->last_q : "(none yet)");
