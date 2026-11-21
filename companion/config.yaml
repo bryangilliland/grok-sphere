@@ -1,0 +1,35 @@
+# Thad + Claude Windows Companion configuration
+# Your Anthropic API key goes in .env (ANTHROPIC_API_KEY=sk-ant-...)
+
+claude_model: "claude-haiku-5-5"   # fast & pennies/mo; or "claude-sonnet-5-5"
+max_tokens: 220
+history_turns: 8
+history_reset_s: 600
+
+# Transports (both run together; USB takes priority when plugged in)
+usb_enabled: true
+usb_port: "auto"                  # "auto" finds ESP32-S3 (303A:1001), or set e.g. "COM5"
+wifi_enabled: true
+server_host: "0.0.0.0"
+server_port: 8765
+advertise_mdns: true
+
+# Audio & voice detection
+volume: 70
+mic_gain: 2.0
+chime: true
+end_silence_s: 0.9
+no_speech_timeout_s: 5.0
+max_seconds: 15.0
+max_spoken_chars: 600
+
+# Wake word: "auto" uses wakewords/hey_thad.onnx if present, else built-in "Hey Thad" detector
+wake_mode: "auto"
+wake_model_path: "wakewords/hey_thad.onnx"
+stt_model: "base.en"
+stt_wake_model: "tiny.en"
+
+# Text-to-speech: "edge" (free neural voice, falls back to Windows offline voice), or "pyttsx3"
+tts_engine: "edge"
+edge_voice: "en-US-AndrewNeural"
+edge_rate: "+5%"

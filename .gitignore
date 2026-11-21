@@ -1,0 +1,32 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+
+# Secrets — never commit API keys or local env
+.env
+.env.*
+!.env.example
+
+# ESP-IDF / firmware build artifacts (source and prebuilt flasher bins are kept)
+firmware/build/
+managed_components/
+*.elf
+*.map
+*.obj
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+
+# Packaging leftovers
+*.zip
