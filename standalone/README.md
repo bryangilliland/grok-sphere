@@ -1,4 +1,4 @@
-# Grok Sphere: standalone Thad (firmware 2.3.2-standalone)
+# Grok Sphere: standalone Thad (firmware 2.3.3-standalone)
 
 The sphere talks to Claude on its own over Wi-Fi, with offline wake-word detection on the ESP32-S3. The laptop is only used to flash in Edge.
 Hardware: Waveshare ESP32-S3-Touch-LCD-1.85C-BOX (16 MB flash, 8 MB PSRAM).
@@ -10,7 +10,12 @@ Hardware: Waveshare ESP32-S3-Touch-LCD-1.85C-BOX (16 MB flash, 8 MB PSRAM).
 
 See `SETUP_GUIDE.txt` for the 6-step phone setup.
 
-## What's new in 2.3.2-standalone
+## What's new in 2.3.3-standalone
+- **Glitch-free PSRAM-buffered TTS:** downloads each spoken sentence completely into PSRAM (`16 KB` TLS RX buffer, `WIFI_PS_NONE` while speaking, `EAGAIN` retry handling) before playback starts, then pipelines sentence N+1 while sentence N plays from a `2 MB` (~64 s) PSRAM stream buffer and `8 x 480`-frame I2S DMA cushion. Playback timeout scales dynamically with audio length (up to 95 s) instead of cutting off early.
+- **Live weather & date/time context for Claude:** caches Open-Meteo current conditions + today's high/low/rain chance (10-min refresh) and SNTP local date/time in Claude's system prompt, with a configurable **Weather location** field (city or `lat, lon`, default `Fort Worth, TX`) on the setup page.
+- **Snappier tap-to-stop:** lowered touchscreen tap duration threshold (`15 ms`) so quick taps/double-taps register reliably.
+
+## Prior 2.3.2-standalone
 - **Pre-trigger noise baseline & non-discarding STT:** measures the 35th-percentile room noise floor from the ~1.5 s ring buffer *before* wake/tap (so your speech never inflates the noise threshold), combines WebRTC/ESP-SR VAD (`vad_mode=2`) with a relative energy drop (`short_rms < 1.3x` baseline for 900 ms, min 1.5 s, max 8 s), and **never** discards tap/wake audio locally — Deepgram decides whether speech was present.
 - **WakeNet9 in noise & wake word clarity:** enables ESP-SR AFE VAD (`VAD_MODE_2`) and `DET_MODE_95` for better recall near TVs/speakers, and documents that the Jarvis model triggers on **"Jarvis"** (not "Hey Jarvis").
 - **Internal RAM relief (PSRAM offload):** shrinks LVGL draw strips from 40 to 20 lines (saving 28.8 KB internal DMA RAM), sets `CONFIG_SPIRAM_MALLOC_ALWAYSINTERNAL=512`, enables `CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY`, and moves task stacks (`lvgl`, `thad`, `weather`), `tone[]`, scan results, HTTP/diagnostic buffers to PSRAM (leaving ~110+ KB internal heap free at idle instead of ~4 KB).
@@ -49,5 +54,5 @@ See `SETUP_GUIDE.txt` for the 6-step phone setup.
 ## Layout
 - `bin/`: merged bin (`0x0`) and app-only update bin (`0x10000`).
 - `firmware/`: ESP-IDF 5.4.2 project (`idf.py build && idf.py merge-bin -o grok_sphere_standalone.bin`). `pack_wake_models.py` packs the 4 WakeNet9 models from `espressif/esp-sr` at build time so `partitions.csv` stays unchanged.
-- `firmware/host_test/run_host_tests.sh`: 543 host checks (wake catalog, voice catalog, mood tag parser, form parsing, setup page + diagnostics with key never echoed, Claude/Deepgram JSON, speech cleanup, WAV, DC-removed AC RMS & VAD).
+- `firmware/host_test/run_host_tests.sh`: 551 host checks (wake catalog, voice catalog, mood tag parser, form parsing, setup page + diagnostics with key never echoed, Claude/Deepgram JSON, speech cleanup, WAV, DC-removed AC RMS & VAD).
 - `previews/`: screen states, emotional capsule-eye moods sheet, and phone setup page screenshots.
