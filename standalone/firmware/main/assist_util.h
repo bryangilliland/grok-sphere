@@ -81,12 +81,18 @@ typedef struct {
     int frame_ms;
     int elapsed_ms, speech_ms, silence_ms;
     float noise;
+    float short_rms;
+    bool baseline_locked;
     bool started;
 } au_vad_t;
 void au_vad_init(au_vad_t *v, int frame_ms);
+/* Locked-baseline VAD using a pre-wake/tap noise floor (never raised by speech) and 1.5 s min capture. */
+void au_vad_init_with_baseline(au_vad_t *v, int frame_ms, float baseline_rms);
 uint32_t au_rms(const int16_t *pcm, size_t n);
 /* DC-removed RMS (strips codec/mic DC offset) and optional AC peak amplitude. */
 uint32_t au_rms_ac(const int16_t *pcm, size_t n, uint16_t *peak_out);
-/* Feed one frame's RMS. Thresholds: no speech within 5 s -> AU_VAD_NO_SPEECH,
- * 0.9 s silence after >= 0.22 s speech (min 0.6 s total) -> AU_VAD_DONE, 8 s cap -> AU_VAD_MAX_LEN. */
+/* Estimate background noise floor (35th percentile) from a pre-trigger RMS history. */
+uint32_t au_noise_percentile(const uint32_t *rms_hist, size_t count);
+/* Feed one frame's RMS (and optional engine VAD decision). */
 vad_result_t au_vad_feed(au_vad_t *v, uint32_t rms);
+vad_result_t au_vad_feed_vad(au_vad_t *v, uint32_t rms, bool engine_speech);

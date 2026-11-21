@@ -20,7 +20,7 @@
 #include "touch.h"
 
 #define LCD_OPCODE_READ_CMD   (0x0BULL)
-#define LVGL_BUF_LINES        40
+#define LVGL_BUF_LINES        20
 #define LVGL_TICK_MS          2
 
 static const char *TAG = "display";
@@ -150,7 +150,10 @@ esp_err_t display_init(bool mirror_x)
     esp_timer_handle_t tick;
     ESP_ERROR_CHECK(esp_timer_create(&targs, &tick));
     ESP_ERROR_CHECK(esp_timer_start_periodic(tick, LVGL_TICK_MS * 1000));
-    xTaskCreatePinnedToCore(lvgl_task, "lvgl", 12288, NULL, 4, NULL, 1);
+    if (xTaskCreatePinnedToCoreWithCaps(lvgl_task, "lvgl", 12288, NULL, 4, NULL, 1,
+                                        MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) != pdPASS) {
+        xTaskCreatePinnedToCore(lvgl_task, "lvgl", 12288, NULL, 4, NULL, 1);
+    }
 
     board_backlight_set(80);
     return ESP_OK;

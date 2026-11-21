@@ -345,8 +345,9 @@ int au_system_prompt(char *out, size_t cap, const char *local_time)
 /* ----------------------------------------------------------------- VAD */
 #define AU_VAD_NO_SPEECH_MS  5000
 #define VAD_SILENCE_MS       900
-#define VAD_MIN_SPEECH_MS    220
+#define VAD_MIN_SPEECH_MS    150
 #define VAD_MIN_RECORD_MS    600
+#define VAD_LOCKED_MIN_MS    1500
 #define VAD_MAX_MS           8000
 #define VAD_MIN_RMS          250.0f
 #define VAD_MAX_THRESH       2500.0f
@@ -356,6 +357,15 @@ void au_vad_init(au_vad_t *v, int frame_ms)
     memset(v, 0, sizeof(*v));
     v->frame_ms = frame_ms > 0 ? frame_ms : 32;
     v->noise = -1.0f;
+}
+
+void au_vad_init_with_baseline(au_vad_t *v, int frame_ms, float baseline_rms)
+{
+    memset(v, 0, sizeof(*v));
+    v->frame_ms = frame_ms > 0 ? frame_ms : 30;
+    v->noise = baseline_rms > 0.0f ? baseline_rms : 150.0f;
+    v->short_rms = v->noise;
+    v->baseline_locked = true;
 }
 
 uint32_t au_rms(const int16_t *pcm, size_t n)
@@ -384,24 +394,71 @@ uint32_t au_rms_ac(const int16_t *pcm, size_t n, uint16_t *peak_out)
     return (uint32_t)sqrt(acc / (double)n);
 }
 
-vad_result_t au_vad_feed(au_vad_t *v, uint32_t rms)
+uint32_t au_noise_percentile(const uint32_t *rms_hist, size_t count)
+{
+    if (!rms_hist || count == 0) return 0;
+    if (count > 64) count = 64;
+    uint32_t tmp[64];
+    for (size_t i = 0; i < count; i++) tmp[i] = rms_hist[i];
+    for (size_t i = 1; i < count; i++) {
+        uint32_t k = tmp[i];
+        size_t j = i;
+        while (j > 0 && tmp[j - 1] > k) {
+            tmp[j] = tmp[j - 1];
+            j--;
+        }
+        tmp[j] = k;
+    }
+    size_t idx = (count * 35) / 100;
+    if (idx >= count) idx = count - 1;
+    return tmp[idx];
+}
+
+vad_result_t au_vad_feed_vad(au_vad_t *v, uint32_t rms, bool engine_speech)
 {
     float r = (float)rms;
     v->elapsed_ms += v->frame_ms;
-    if (v->noise < 0) v->noise = r < 800.0f ? r : 800.0f;   /* first frame may already be speech */
+
+    if (v->baseline_locked) {
+        /* Pre-trigger noise floor is fixed; track short-term speech energy vs baseline */
+        v->short_rms = v->short_rms * 0.65f + r * 0.35f;
+        float speech_thresh = v->noise * 1.45f;
+        if (speech_thresh < 320.0f) speech_thresh = 320.0f;
+        float eng_thresh = v->noise * 1.15f;
+        if (eng_thresh < 220.0f) eng_thresh = 220.0f;
+        float quiet_thresh = v->noise * 1.30f;
+        if (quiet_thresh < 260.0f) quiet_thresh = 260.0f;
+
+        bool is_speech = (v->short_rms > speech_thresh) || (engine_speech && v->short_rms > eng_thresh);
+        bool is_quiet  = (v->short_rms < quiet_thresh) && !engine_speech;
+
+        if (is_speech) {
+            v->speech_ms += v->frame_ms;
+            v->silence_ms = 0;
+            if (v->speech_ms >= VAD_MIN_SPEECH_MS) v->started = true;
+        } else if (is_quiet) {
+            v->silence_ms += v->frame_ms;
+            if (!v->started) v->speech_ms = 0;
+        }
+        if (v->elapsed_ms >= VAD_MAX_MS) return AU_VAD_MAX_LEN;
+        if (v->started && v->silence_ms >= VAD_SILENCE_MS && v->elapsed_ms >= VAD_LOCKED_MIN_MS) return AU_VAD_DONE;
+        /* Never discard audio locally when baseline_locked: keep capturing up to cap / tap / silence drop */
+        return v->started ? AU_VAD_SPEECH : AU_VAD_WAITING;
+    }
+
+    if (v->noise < 0) v->noise = r < 800.0f ? r : 800.0f;
     float thresh = v->noise * 2.4f + 120.0f;
     if (thresh < VAD_MIN_RMS) thresh = VAD_MIN_RMS;
     if (thresh > VAD_MAX_THRESH) thresh = VAD_MAX_THRESH;
-    bool loud = r > thresh;
+    bool loud = (r > thresh) || (engine_speech && r > VAD_MIN_RMS);
     if (!loud || (!v->started && r < v->noise)) {
-        /* adapt background noise floor during quiet periods */
         v->noise = v->noise * 0.90f + r * 0.10f;
         if (v->noise > 1200.0f) v->noise = 1200.0f;
     }
     if (loud) {
         v->speech_ms += v->frame_ms;
         v->silence_ms = 0;
-        if (v->speech_ms >= VAD_MIN_SPEECH_MS) v->started = true;
+        if (v->speech_ms >= 220) v->started = true;
     } else {
         v->silence_ms += v->frame_ms;
         if (!v->started) v->speech_ms = 0;
@@ -410,4 +467,9 @@ vad_result_t au_vad_feed(au_vad_t *v, uint32_t rms)
     if (v->started && v->silence_ms >= VAD_SILENCE_MS && v->elapsed_ms >= VAD_MIN_RECORD_MS) return AU_VAD_DONE;
     if (!v->started && v->elapsed_ms >= AU_VAD_NO_SPEECH_MS) return AU_VAD_NO_SPEECH;
     return v->started ? AU_VAD_SPEECH : AU_VAD_WAITING;
+}
+
+vad_result_t au_vad_feed(au_vad_t *v, uint32_t rms)
+{
+    return au_vad_feed_vad(v, rms, false);
 }

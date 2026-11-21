@@ -165,7 +165,7 @@ size_t audio_mic_read(int16_t *dst, size_t samples)
         return samples;
     }
     if (!s_rx) return 0;
-    static int32_t raw[512];
+    static EXT_RAM_BSS_ATTR int32_t raw[512];
     size_t done = 0;
     while (done < samples) {
         size_t n = samples - done;
@@ -189,7 +189,7 @@ static void write_out(const int16_t *pcm, size_t n)
         esp_codec_dev_write(s_out_dev, (void *)pcm, n * sizeof(int16_t));
         return;
     }
-    static int32_t buf[PLAY_CHUNK];
+    static EXT_RAM_BSS_ATTR int32_t buf[PLAY_CHUNK];
     float g = (float)s_volume / 100.0f;
     int32_t factor = (int32_t)(g * g * 65536.0f);
     for (size_t i = 0; i < n; i++) buf[i] = (int32_t)pcm[i] * factor;
@@ -272,10 +272,13 @@ void audio_stop(void)
 
 void audio_play_chime(void)
 {
-    /* two short rising tones, generated on the fly */
-    static int16_t tone[AUDIO_SAMPLE_RATE / 4];
+    /* two short rising tones, generated on the fly in PSRAM */
+    size_t n_samp = AUDIO_SAMPLE_RATE / 4;
+    size_t bytes = n_samp * sizeof(int16_t);
+    int16_t *tone = heap_caps_malloc(bytes, MALLOC_CAP_SPIRAM);
+    if (!tone) return;
     const float freqs[2] = {880.0f, 1320.0f};
-    size_t half = sizeof(tone) / sizeof(tone[0]) / 2;
+    size_t half = n_samp / 2;
     for (int t = 0; t < 2; t++) {
         for (size_t i = 0; i < half; i++) {
             float env = 1.0f;
@@ -284,7 +287,8 @@ void audio_play_chime(void)
             tone[t * half + i] = (int16_t)(9000.0f * env * sinf(2.0f * (float)M_PI * freqs[t] * i / AUDIO_SAMPLE_RATE));
         }
     }
-    audio_stream_push((const uint8_t *)tone, sizeof(tone));
+    audio_stream_push((const uint8_t *)tone, bytes);
+    free(tone);
 }
 
 void audio_set_volume(int percent)
