@@ -41,7 +41,7 @@
 #define ANTHROPIC_URL   "https://api.anthropic.com/v1/messages"
 #define DG_LISTEN_URL   "https://api.deepgram.com/v1/listen?model=nova-3&smart_format=true&language=en"
 
-typedef enum { EV_TAP, EV_TEXT } ev_type_t;
+typedef enum { EV_TAP, EV_TEXT, EV_PREVIEW } ev_type_t;
 typedef struct { ev_type_t type; char *text; } ev_t;
 
 static QueueHandle_t s_q;
@@ -107,6 +107,13 @@ void assistant_ask_text(const char *q)
     ev_t e = { .type = EV_TEXT, .text = strdup(q) };
     if (!e.text || xQueueSend(s_q, &e, 0) != pdTRUE) free(e.text);
     else set_last(q, "");
+}
+
+void assistant_preview(const char *voice)
+{
+    if (s_busy) return;
+    ev_t e = { .type = EV_PREVIEW, .text = strdup(voice ? voice : "") };
+    if (!e.text || xQueueSend(s_q, &e, 0) != pdTRUE) free(e.text);
 }
 
 /* ---------------------------------------------------------------- HTTP helper */
@@ -363,6 +370,18 @@ static void handle(const ev_t *e, int16_t *rec)
     if (!question || !reply || !spoken) goto done;
 
     if (!net_is_connected()) { fail("No Wi-Fi"); goto done; }
+
+    if (e->type == EV_PREVIEW) {
+        if (!s.speech_key[0]) { fail("Save a Deepgram key first, then preview."); goto done; }
+        if (e->text && au_voice_valid(e->text)) strcpy(s.voice, e->text);
+        ui_set_state(UI_STATE_SPEAKING, "", "");
+        ui_set_reply(AU_PREVIEW_TEXT);
+        speak(&s, AU_PREVIEW_TEXT);
+        ui_set_state(UI_STATE_IDLE, "", "");
+        ui_fade_reply(6000);
+        goto done;
+    }
+
     if (!s.api_key[0]) {
         char msg[96];
         snprintf(msg, sizeof(msg), "Add your Claude key at http://%s", net_ip_str());

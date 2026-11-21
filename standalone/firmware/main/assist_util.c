@@ -7,13 +7,23 @@
 #include <math.h>
 #include "cJSON.h"
 
+/* IDs from https://developers.deepgram.com/docs/tts-models (Aura-2 English, /v1/speak). */
 const au_voice_t AU_VOICES[] = {
-    { "aura-2-orion-en",  "Orion (male, calm)" },
-    { "aura-2-apollo-en", "Apollo (male, casual)" },
-    { "aura-2-arcas-en",  "Arcas (male, smooth)" },
-    { "aura-2-zeus-en",   "Zeus (male, deep)" },
-    { "aura-2-thalia-en", "Thalia (female, bright)" },
-    { "aura-2-helena-en", "Helena (female, warm)" },
+    { "aura-2-orion-en",     "Orion (calm male, US)" },
+    { "aura-2-apollo-en",    "Apollo (casual male, US)" },
+    { "aura-2-arcas-en",     "Arcas (smooth male, US)" },
+    { "aura-2-aries-en",     "Aries (warm male, US)" },
+    { "aura-2-zeus-en",      "Zeus (deep male, US)" },
+    { "aura-2-draco-en",     "Draco (warm male, British)" },
+    { "aura-2-hyperion-en",  "Hyperion (warm male, Australian)" },
+    { "aura-2-thalia-en",    "Thalia (bright female, US)" },
+    { "aura-2-helena-en",    "Helena (warm female, US)" },
+    { "aura-2-andromeda-en", "Andromeda (casual female, US)" },
+    { "aura-2-athena-en",    "Athena (calm female, US)" },
+    { "aura-2-luna-en",      "Luna (friendly female, US)" },
+    { "aura-2-pandora-en",   "Pandora (calm female, British)" },
+    { "aura-2-theia-en",     "Theia (polite female, Australian)" },
+    { "aura-2-amalthea-en",  "Amalthea (cheerful female, Filipino)" },
 };
 const int AU_VOICE_COUNT = sizeof(AU_VOICES) / sizeof(AU_VOICES[0]);
 

@@ -10,6 +10,7 @@
 #define AU_MODEL_HAIKU     "claude-haiku-5-5"
 #define AU_MODEL_SONNET    "claude-sonnet-5-5"
 #define AU_DEFAULT_VOICE   "aura-2-orion-en"
+#define AU_PREVIEW_TEXT    "Hi, I'm Thad. This is how I sound."
 #define AU_ANTHROPIC_VERSION "2026-10-21"
 
 typedef struct { const char *id; const char *label; } au_voice_t;
