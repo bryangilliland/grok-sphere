@@ -1,4 +1,4 @@
-# Grok Sphere: standalone Thad (firmware 2.3.0-standalone)
+# Grok Sphere: standalone Thad (firmware 2.3.1-standalone)
 
 The sphere talks to Claude on its own over Wi-Fi, with offline wake-word detection on the ESP32-S3. The laptop is only used to flash in Edge.
 Hardware: Waveshare ESP32-S3-Touch-LCD-1.85C-BOX (16 MB flash, 8 MB PSRAM).
@@ -10,7 +10,8 @@ Hardware: Waveshare ESP32-S3-Touch-LCD-1.85C-BOX (16 MB flash, 8 MB PSRAM).
 
 See `SETUP_GUIDE.txt` for the 6-step phone setup.
 
-## What's new in 2.3.0-standalone
+## What's new in 2.3.1-standalone
+- **Boot & LVGL render fix:** removed LVGL `transform_angle` software-layer draws (which require `LV_COLOR_SCREEN_TRANSP` and allocate layer buffers at render time), added geometry/style dirty-checking (0 redundant flushes when static), bumped LVGL task stack to 12 KB, and guarded mood overlay init so boot always flushes plain capsule eyes first.
 - **Robust voice capture & watchdogs:** DC-offset-removed RMS + adaptive noise floor for end-of-speech detection (~900 ms trailing silence), 0.6 s minimum / 8 s hard cap (always proceeds to STT), 5 s no-speech timeout (`Didn't catch that`), tap-while-listening stops recording and sends immediately, chime off by default (optional **Chime** toggle on setup page), and per-stage error/stall watchdogs (`Mic: no audio`, `No internet`, `Deepgram key rejected`, `Claude error ...`).
 - **Emotional capsule eyes:** builds on the original capsule eyes with **Happy**, **Curious**, **Surprised**, **Sad**, **Bored** (after 2 min idle), and **Sleepy** (after 10 min idle, wakes immediately on wake word/tap), plus natural blinks, idle glances, optional hidden `[mood:...]` tags from Claude (stripped before TTS), and a **Preview moods** button on the setup page.
 - **Diagnostics card:** on `http://grok-sphere.local` showing last error, wake word status, last mic peak/RMS, last transcript, last Claude reply snippet, Wi-Fi RSSI, and free heap (never shows keys).

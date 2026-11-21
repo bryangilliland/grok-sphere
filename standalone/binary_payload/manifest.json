@@ -1,8 +1,8 @@
 [
  {
   "dest": "bin/grok_sphere_standalone.bin",
-  "bytes": 3382528,
-  "sha256": "f3a05e5920f2a8701466b1bec04fe702bb1aeac722e485291f3a36dbc7dac941",
+  "bytes": 3383408,
+  "sha256": "fc62c3ed2e6627dc57ad5a8f43388c4bac73aec5256c85dba459bf9a66ea7fc5",
   "parts": [
    "binary_payload/bin__grok_sphere_standalone.bin.b64.01",
    "binary_payload/bin__grok_sphere_standalone.bin.b64.02",
@@ -14,8 +14,8 @@
  },
  {
   "dest": "bin/grok_sphere_standalone_app_0x10000.bin",
-  "bytes": 3316992,
-  "sha256": "90e368b0f4f102bad14d96dea4540c43d36576a510e016cc97adb31d990c346c",
+  "bytes": 3317872,
+  "sha256": "6b0708441bbc43e4472a83d1e445cd020bcdcac387b3a26b79b9aaee94998e9b",
   "parts": [
    "binary_payload/bin__grok_sphere_standalone_app_0x10000.bin.b64.01",
    "binary_payload/bin__grok_sphere_standalone_app_0x10000.bin.b64.02",
@@ -27,8 +27,8 @@
  },
  {
   "dest": "previews/previews.tar",
-  "bytes": 552960,
-  "sha256": "165645b9007908680120153ff4950177fe85e5cff33ec3e8c43fbf578d82aa4b",
+  "bytes": 542720,
+  "sha256": "17bf8d847ce2dbbba768585a9fe8d8941f3956eda2fbe3a78b6af9e33d00a866",
   "parts": [
    "binary_payload/previews__previews.tar.b64.01"
   ]
