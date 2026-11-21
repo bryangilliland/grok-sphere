@@ -37,16 +37,37 @@ void au_wav_header(uint8_t out[44], uint32_t samples, uint32_t sample_rate);
 
 typedef struct { const char *role; const char *text; } au_turn_t;   /* role: "user" / "assistant" */
 
+#define AU_WEB_SEARCH_TYPE     "web_search_20250305"  /* basic server tool; no beta header */
+#define AU_WEB_SEARCH_MAX_USES 2
+
+typedef struct {
+    int max_uses;            /* 0 = omit the tool */
+    const char *city;        /* may be NULL */
+    const char *region;
+    const char *country;     /* ISO 3166-1 alpha-2, e.g. "US" */
+    const char *timezone;    /* IANA, e.g. "America/Chicago" */
+} au_web_search_t;
+
 /* thinking_mode: 0 = omit thinking + output_config (fallback), 1 = {"type":"disabled"} + effort low,
- * 2 = {"type":"between_tools"} + effort low. Returns malloc'd JSON (free()), or NULL. */
+ * 2 = {"type":"between_tools"} + effort low. web may be NULL (no tool). Returns malloc'd JSON (free()), or NULL. */
 char *au_claude_request(const char *model, int max_tokens, const char *system,
-                        const au_turn_t *history, int n_history, const char *user, int thinking_mode);
+                        const au_turn_t *history, int n_history, const char *user, int thinking_mode,
+                        const au_web_search_t *web);
 /* Best thinking mode for a model id (Haiku 5.5 accepts "disabled"; Sonnet 5.5 needs "between_tools"). */
 int au_thinking_mode_for(const char *model);
 
-/* Parse a Messages API response. On success copies all text blocks into out and returns true.
- * On an API error returns false and copies error.message (or a short reason) into err. */
+/* Parse a Messages API response. Concatenates text blocks (after the last server-tool block, if any),
+ * strips citation markers/URLs, and returns true on success. On an API error returns false and
+ * copies error.message (or a short reason) into err. */
 bool au_parse_claude(const char *json, char *out, size_t cap, char *err, size_t errcap);
+/* usage.server_tool_use.web_search_requests, else count of web_search server_tool_use blocks. */
+int au_claude_web_search_count(const char *json);
+/* True when an error message means the org/account has not enabled the web_search tool. */
+bool au_web_search_rejected(const char *err);
+/* Remove URLs, [n] citation markers, and leftover empty parentheses, in place. */
+void au_strip_citations(char *s);
+/* Derive city/region from a location setting (city or "lat, lon"). Defaults to Fort Worth / Texas. */
+void au_web_location_from_setting(const char *loc, char *city, size_t cc, char *region, size_t rc);
 
 /* Parse a Deepgram /v1/listen response: results.channels[0].alternatives[0].transcript. */
 bool au_parse_deepgram(const char *json, char *out, size_t cap);
@@ -71,7 +92,7 @@ typedef enum {
     AU_MOOD_CURIOUS,
 } au_mood_t;
 
-int au_system_prompt(char *out, size_t cap, const char *local_time, const char *weather_summary);
+int au_system_prompt(char *out, size_t cap, const char *local_time, const char *weather_summary, bool web_search);
 /* Strip an optional leading "[mood:...]" tag in place and return the parsed mood. */
 au_mood_t au_extract_mood(char *text);
 /* Split spoken text into up to max_segs natural sentences for pipelined TTS. Returns segment count. */

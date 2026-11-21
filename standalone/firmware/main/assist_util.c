@@ -99,7 +99,8 @@ int au_thinking_mode_for(const char *model)
 }
 
 char *au_claude_request(const char *model, int max_tokens, const char *system,
-                        const au_turn_t *history, int n_history, const char *user, int thinking_mode)
+                        const au_turn_t *history, int n_history, const char *user, int thinking_mode,
+                        const au_web_search_t *web)
 {
     cJSON *root = cJSON_CreateObject();
     if (!root) return NULL;
@@ -111,6 +112,21 @@ char *au_claude_request(const char *model, int max_tokens, const char *system,
         cJSON_AddStringToObject(th, "type", thinking_mode == 1 ? "disabled" : "between_tools");
         cJSON *oc = cJSON_AddObjectToObject(root, "output_config");
         cJSON_AddStringToObject(oc, "effort", "low");
+    }
+    if (web && web->max_uses > 0) {
+        cJSON *tools = cJSON_AddArrayToObject(root, "tools");
+        cJSON *tool = cJSON_CreateObject();
+        cJSON_AddStringToObject(tool, "type", AU_WEB_SEARCH_TYPE);
+        cJSON_AddStringToObject(tool, "name", "web_search");
+        cJSON_AddNumberToObject(tool, "max_uses", web->max_uses);
+        cJSON *loc = cJSON_AddObjectToObject(tool, "user_location");
+        cJSON_AddStringToObject(loc, "type", "approximate");
+        if (web->city && web->city[0]) cJSON_AddStringToObject(loc, "city", web->city);
+        if (web->region && web->region[0]) cJSON_AddStringToObject(loc, "region", web->region);
+        cJSON_AddStringToObject(loc, "country", (web->country && web->country[0]) ? web->country : "US");
+        cJSON_AddStringToObject(loc, "timezone",
+            (web->timezone && web->timezone[0]) ? web->timezone : "America/Chicago");
+        cJSON_AddItemToArray(tools, tool);
     }
     cJSON *msgs = cJSON_AddArrayToObject(root, "messages");
     for (int i = 0; i < n_history; i++) {
@@ -135,6 +151,137 @@ static void copy_str(char *out, size_t cap, const char *s)
     snprintf(out, cap, "%s", s ? s : "");
 }
 
+static int is_tool_block(const char *t)
+{
+    return t && (strcmp(t, "server_tool_use") == 0 || strcmp(t, "web_search_tool_result") == 0 ||
+                 strcmp(t, "tool_use") == 0 || strcmp(t, "tool_result") == 0 ||
+                 strcmp(t, "code_execution_tool_result") == 0);
+}
+
+void au_strip_citations(char *s)
+{
+    if (!s) return;
+    char *d = s;
+    const char *p = s;
+    while (*p) {
+        /* markdown [title](url) -> title */
+        if (*p == '[' ) {
+            const char *rb = strchr(p, ']');
+            if (rb && rb[1] == '(' ) {
+                const char *rp = strchr(rb + 2, ')');
+                if (rp) {
+                    size_t n = (size_t)(rb - (p + 1));
+                    /* skip numeric citations like [1](url) */
+                    int all_digit = n > 0;
+                    for (size_t i = 0; i < n; i++) if (!isdigit((unsigned char)p[1 + i])) { all_digit = 0; break; }
+                    if (!all_digit) { memcpy(d, p + 1, n); d += n; }
+                    p = rp + 1;
+                    continue;
+                }
+            }
+            /* bare [1] / [12] citation markers */
+            if (rb) {
+                int all_digit = rb > p + 1;
+                for (const char *q = p + 1; q < rb; q++) if (!isdigit((unsigned char)*q)) { all_digit = 0; break; }
+                if (all_digit) { p = rb + 1; continue; }
+            }
+        }
+        if ((strncmp(p, "http://", 7) == 0) || (strncmp(p, "https://", 8) == 0) ||
+            (strncmp(p, "www.", 4) == 0 && p[4] && !isspace((unsigned char)p[4]))) {
+            while (*p && !isspace((unsigned char)*p) && *p != ')' && *p != ']') p++;
+            continue;
+        }
+        *d++ = *p++;
+    }
+    *d = 0;
+    /* drop leftover empty parens and collapse whitespace */
+    d = s; p = s;
+    int space = 1;
+    while (*p) {
+        if (*p == '(' && p[1] == ')') { p += 2; continue; }
+        if (isspace((unsigned char)*p)) {
+            if (!space) { *d++ = ' '; space = 1; }
+            p++;
+            continue;
+        }
+        space = 0;
+        *d++ = *p++;
+    }
+    while (d > s && isspace((unsigned char)d[-1])) d--;
+    *d = 0;
+    /* drop spaces left in front of punctuation after a URL/citation was removed */
+    d = s; p = s;
+    while (*p) {
+        if (*p == ' ' && (p[1] == '.' || p[1] == ',' || p[1] == '!' || p[1] == '?' || p[1] == ';' || p[1] == ':')) {
+            p++;
+            continue;
+        }
+        *d++ = *p++;
+    }
+    *d = 0;
+}
+
+int au_claude_web_search_count(const char *json)
+{
+    cJSON *root = json ? cJSON_Parse(json) : NULL;
+    if (!root) return 0;
+    int n = 0;
+    cJSON *usage = cJSON_GetObjectItem(root, "usage");
+    cJSON *stu = usage ? cJSON_GetObjectItem(usage, "server_tool_use") : NULL;
+    cJSON *req = stu ? cJSON_GetObjectItem(stu, "web_search_requests") : NULL;
+    if (cJSON_IsNumber(req)) {
+        n = req->valueint;
+    } else {
+        cJSON *content = cJSON_GetObjectItem(root, "content");
+        cJSON *blk;
+        cJSON_ArrayForEach(blk, content) {
+            cJSON *bt = cJSON_GetObjectItem(blk, "type");
+            cJSON *nm = cJSON_GetObjectItem(blk, "name");
+            if (cJSON_IsString(bt) && strcmp(bt->valuestring, "server_tool_use") == 0 &&
+                cJSON_IsString(nm) && strcmp(nm->valuestring, "web_search") == 0) n++;
+        }
+    }
+    cJSON_Delete(root);
+    return n;
+}
+
+bool au_web_search_rejected(const char *err)
+{
+    if (!err || !err[0]) return false;
+    char buf[240];
+    size_t n = strlen(err);
+    if (n >= sizeof(buf)) n = sizeof(buf) - 1;
+    for (size_t i = 0; i < n; i++) buf[i] = (char)tolower((unsigned char)err[i]);
+    buf[n] = 0;
+    if (!strstr(buf, "web_search") && !strstr(buf, "web search")) return false;
+    return strstr(buf, "not enabled") || strstr(buf, "disabled") || strstr(buf, "permission") ||
+           strstr(buf, "not available") || strstr(buf, "not supported") || strstr(buf, "unknown tool") ||
+           strstr(buf, "invalid") || strstr(buf, "unauthorized");
+}
+
+void au_web_location_from_setting(const char *loc, char *city, size_t cc, char *region, size_t rc)
+{
+    if (city && cc) snprintf(city, cc, "Fort Worth");
+    if (region && rc) snprintf(region, rc, "Texas");
+    if (!loc || !loc[0]) return;
+    double lat, lon;
+    if (au_parse_latlon(loc, &lat, &lon)) return;
+    char tmp[64];
+    snprintf(tmp, sizeof(tmp), "%s", loc);
+    au_trim(tmp);
+    char *comma = strchr(tmp, ',');
+    if (comma) {
+        *comma = 0;
+        au_trim(tmp);
+        au_trim(comma + 1);
+        if (tmp[0] && city && cc) snprintf(city, cc, "%s", tmp);
+        if (comma[1] && region && rc) snprintf(region, rc, "%s", comma + 1);
+    } else if (tmp[0] && city && cc) {
+        snprintf(city, cc, "%s", tmp);
+        if (region && rc) region[0] = 0;
+    }
+}
+
 bool au_parse_claude(const char *json, char *out, size_t cap, char *err, size_t errcap)
 {
     if (out && cap) out[0] = 0;
@@ -149,12 +296,21 @@ bool au_parse_claude(const char *json, char *out, size_t cap, char *err, size_t 
         copy_str(err, errcap, cJSON_IsString(msg) ? msg->valuestring : "Claude returned an error");
     } else {
         cJSON *content = cJSON_GetObjectItem(root, "content");
-        size_t used = 0;
+        int idx = 0, last_tool = -1;
         cJSON *blk;
         cJSON_ArrayForEach(blk, content) {
             cJSON *bt = cJSON_GetObjectItem(blk, "type");
+            if (cJSON_IsString(bt) && is_tool_block(bt->valuestring)) last_tool = idx;
+            idx++;
+        }
+        size_t used = 0;
+        idx = 0;
+        cJSON_ArrayForEach(blk, content) {
+            cJSON *bt = cJSON_GetObjectItem(blk, "type");
             cJSON *tx = cJSON_GetObjectItem(blk, "text");
-            if (!cJSON_IsString(bt) || strcmp(bt->valuestring, "text") != 0 || !cJSON_IsString(tx)) continue;
+            int keep = (idx > last_tool);
+            idx++;
+            if (!keep || !cJSON_IsString(bt) || strcmp(bt->valuestring, "text") != 0 || !cJSON_IsString(tx)) continue;
             size_t l = strlen(tx->valuestring);
             if (used && used + 1 < cap) out[used++] = ' ';
             if (used + l >= cap) l = cap - used - 1;
@@ -162,7 +318,8 @@ bool au_parse_claude(const char *json, char *out, size_t cap, char *err, size_t 
             used += l;
             out[used] = 0;
         }
-        ok = used > 0;
+        if (used) au_strip_citations(out);
+        ok = out && out[0];
         if (!ok) copy_str(err, errcap, "Claude sent an empty reply");
     }
     cJSON_Delete(root);
@@ -326,7 +483,7 @@ au_mood_t au_extract_mood(char *text)
     return mood;
 }
 
-int au_system_prompt(char *out, size_t cap, const char *local_time, const char *weather_summary)
+int au_system_prompt(char *out, size_t cap, const char *local_time, const char *weather_summary, bool web_search)
 {
     return snprintf(out, cap,
         "You are Thad, Bryan Gilliland's personal assistant, running on his desk sphere (Grok Sphere) "
@@ -334,18 +491,22 @@ int au_system_prompt(char *out, size_t cap, const char *local_time, const char *
         "Everything you write is read aloud by a text-to-speech voice and shown on a tiny round screen, so: "
         "answer in 1 to 3 short spoken sentences; "
         "plain conversational English; no markdown, lists, emojis, URLs or code. "
+        "Never read URLs, citation markers, or source lists aloud. "
         "Be warm, direct and a little witty. If you are unsure, say so briefly. "
         "Optionally start your reply with a hidden tag [mood:happy], [mood:curious], [mood:surprised], "
         "or [mood:sad] when it fits the tone (never mention the tag). "
-        "You cannot browse the web, send email, or see his calendar from this device."
-        "%s%s%s%s%s",
+        "You cannot send email or see his calendar from this device."
+        "%s%s%s%s%s%s",
         (local_time && local_time[0]) ? " Current local date and time: " : "",
         (local_time && local_time[0]) ? local_time : "",
         (weather_summary && weather_summary[0]) ? " Live local weather and forecast: " : "",
         (weather_summary && weather_summary[0]) ? weather_summary : "",
         ((local_time && local_time[0]) || (weather_summary && weather_summary[0]))
-            ? " This live date, time, and weather data on the sphere is accurate and current; use it directly when asked."
-            : "");
+            ? " This live date, time, and weather data on the sphere is accurate and current; use it first when asked about the weather or the time, and do not search the web for that."
+            : "",
+        web_search
+            ? " You may use web search only for things that need current information (news, scores, prices, business hours, events, and similar). Do not search for stable knowledge, math, or casual conversation."
+            : " You cannot browse the web from this device.");
 }
 
 int au_split_sentences(const char *text, const char **starts, size_t *lens, int max_segs)

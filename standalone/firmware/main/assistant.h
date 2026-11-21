@@ -13,6 +13,7 @@ typedef struct {
     bool speech_detected;
     uint32_t rec_ms;
     char wake_active[36];
+    int last_web_searches;
 } assistant_diag_t;
 
 void assistant_init(void);

@@ -24,6 +24,7 @@ esp_err_t settings_load(sphere_settings_t *s)
     strcpy(s->wake_word, AU_DEFAULT_WAKE);
     s->chime_enabled = false;
     strcpy(s->location, "Fort Worth, TX");
+    s->web_search = true;
     nvs_handle_t h;
     if (nvs_open(NS, NVS_READONLY, &h) != ESP_OK) return ESP_OK;   /* first boot */
     get_str(h, "ssid", s->ssid, sizeof(s->ssid));
@@ -45,6 +46,7 @@ esp_err_t settings_load(sphere_settings_t *s)
     char loc[64];
     get_str(h, "loc", loc, sizeof(loc));
     if (loc[0]) strcpy(s->location, loc);
+    if (nvs_get_u8(h, "web_on", &u8) == ESP_OK) s->web_search = u8 != 0;
     nvs_close(h);
     return ESP_OK;
 }
@@ -66,6 +68,7 @@ esp_err_t settings_save(const sphere_settings_t *s)
     err |= nvs_set_u8(h, "chime_on", s->chime_enabled ? 1 : 0);
     err |= nvs_set_str(h, "wake_word", s->wake_word[0] ? s->wake_word : AU_DEFAULT_WAKE);
     err |= nvs_set_str(h, "loc", s->location[0] ? s->location : "Fort Worth, TX");
+    err |= nvs_set_u8(h, "web_on", s->web_search ? 1 : 0);
     err |= nvs_commit(h);
     nvs_close(h);
     return err;
