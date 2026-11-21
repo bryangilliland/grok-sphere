@@ -17,6 +17,7 @@
 #include "esp_mac.h"
 #include "esp_netif.h"
 #include "esp_random.h"
+#include "esp_heap_caps.h"
 #include "esp_system.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
@@ -31,7 +32,7 @@
 
 #define BIT_CONNECTED  BIT0
 #define MAX_SCAN       20
-#define PAGE_MAX       20480
+#define PAGE_MAX       24576
 #define BODY_MAX       2048
 
 static const char *TAG = "net";
@@ -50,6 +51,11 @@ static void retry_cb(void *arg) { (void)arg; if (s_sta_wanted) esp_wifi_connect(
 bool net_is_connected(void) { return s_ev && (xEventGroupGetBits(s_ev) & BIT_CONNECTED); }
 bool net_portal_running(void) { return s_portal; }
 const char *net_ip_str(void) { return net_is_connected() ? s_ip : ""; }
+int net_wifi_rssi(void) {
+    if (!net_is_connected()) return 0;
+    wifi_ap_record_t ap;
+    return (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) ? ap.rssi : 0;
+}
 
 static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
 {
@@ -167,19 +173,23 @@ static esp_err_t send_page(httpd_req_t *req, const char *notice)
     int nscan = 0;
     for (int i = 0; i < s_scan_n && i < MAX_SCAN; i++) scans[nscan++] = (const char *)s_scan[i].ssid;
 
-    char *q = malloc(520), *a = malloc(1100);
+    assistant_diag_t *diag = calloc(1, sizeof(assistant_diag_t));
     char *page = malloc(PAGE_MAX);
-    if (!q || !a || !page) { free(q); free(a); free(page); return ESP_ERR_NO_MEM; }
-    assistant_last(q, 520, a, 1100);
+    if (!diag || !page) { free(diag); free(page); return ESP_ERR_NO_MEM; }
+    assistant_diag(diag);
     setup_page_info_t info = {
         .ssid = s.ssid, .wifi_connected = net_is_connected(), .ip = net_ip_str(),
         .api_key_masked = akm, .speech_key_masked = dkm, .model = s.model, .voice = s.voice,
-        .volume = s.volume, .mirror_x = s.mirror_x, .wake_enabled = s.wake_enabled, .wake_word = s.wake_word, .scan_ssids = scans, .scan_n = nscan,
-        .last_q = q, .last_a = a, .notice = notice,
+        .volume = s.volume, .mirror_x = s.mirror_x, .wake_enabled = s.wake_enabled, .wake_word = s.wake_word,
+        .chime_enabled = s.chime_enabled, .scan_ssids = scans, .scan_n = nscan,
+        .last_q = diag->last_q, .last_a = diag->last_a, .notice = notice,
+        .diag_err = diag->last_err, .diag_mic_peak = diag->mic_peak, .diag_mic_rms = diag->mic_rms,
+        .diag_rssi = net_wifi_rssi(), .diag_free_heap = (unsigned)esp_get_free_heap_size(),
+        .diag_free_int = (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+        .diag_wake = diag->wake_active,
     };
     int n = net_setup_page_build(page, PAGE_MAX, &info);
-    free(q);
-    free(a);
+    free(diag);
     if (n < 0) { free(page); return ESP_FAIL; }
     httpd_resp_set_type(req, "text/html");
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
@@ -235,6 +245,7 @@ static esp_err_t h_save(httpd_req_t *req)
     }
     s.wake_enabled = net_form_get(body, "wakeon", tmp, sizeof(tmp));
     if (net_form_get(body, "wake", tmp, sizeof(tmp)) && au_wake_valid(tmp)) strcpy(s.wake_word, tmp);
+    s.chime_enabled = net_form_get(body, "chime", tmp, sizeof(tmp));
     s.mirror_x = net_form_get(body, "mirror", tmp, sizeof(tmp));
     if (net_form_get(body, "ssid", tmp, sizeof(s.ssid))) {
         au_trim(tmp);
@@ -306,6 +317,18 @@ static esp_err_t h_preview(httpd_req_t *req)
     return send_page(req, notice);
 }
 
+static esp_err_t h_moods(httpd_req_t *req)
+{
+    const char *notice;
+    if (assistant_busy()) {
+        notice = "Wait until Thad finishes, then preview moods.";
+    } else {
+        ui_preview_moods();
+        notice = "Showing all eye moods on the sphere.";
+    }
+    return send_page(req, notice);
+}
+
 static esp_err_t h_ask(httpd_req_t *req)
 {
     char *body = calloc(1, BODY_MAX);
@@ -366,6 +389,7 @@ void net_http_start(void)
         { .uri = "/save",  .method = HTTP_POST, .handler = h_save },
         { .uri = "/ask",     .method = HTTP_POST, .handler = h_ask },
         { .uri = "/preview", .method = HTTP_POST, .handler = h_preview },
+        { .uri = "/moods",   .method = HTTP_POST, .handler = h_moods },
         { .uri = "/flash",   .method = HTTP_POST, .handler = h_flash },
         { .uri = "/reset", .method = HTTP_POST, .handler = h_reset },
     };

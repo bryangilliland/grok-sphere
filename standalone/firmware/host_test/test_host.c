@@ -57,8 +57,11 @@ static void test_page(void)
         .ssid = "HomeNet", .wifi_connected = true, .ip = "192.168.1.50",
         .api_key_masked = masked, .speech_key_masked = "", .model = 0, .voice = "aura-2-orion-en",
         .volume = 70, .wake_enabled = true, .wake_word = "wn9_hiesp",
-        .scan_ssids = scans, .scan_n = 3,
+        .chime_enabled = false, .scan_ssids = scans, .scan_n = 3,
         .last_q = "What's 2+2?", .last_a = "Four.", .notice = "Saved.",
+        .diag_err = "None", .diag_mic_peak = 3200, .diag_mic_rms = 850,
+        .diag_rssi = -56, .diag_free_heap = 7200 * 1024, .diag_free_int = 138 * 1024,
+        .diag_wake = "on (Jarvis)",
     };
     int n = net_setup_page_build(page, 20480, &in);
     CHECK(n > 1000 && (size_t)n == strlen(page));
@@ -76,6 +79,9 @@ static void test_page(void)
     CHECK(strstr(page, "name=wakeon value=1 checked"));
     CHECK(strstr(page, "value=\"wn9_hiesp\" selected>Hi, ESP"));
     CHECK(strstr(page, "value=\"wn9_alexa\"") && strstr(page, "value=\"wn9_jarvis_tts\"") && strstr(page, "value=\"wn9_computer_tts\""));
+    CHECK(!strstr(page, "name=chime value=1 checked"));
+    CHECK(strstr(page, "action=/moods") && strstr(page, "Preview moods"));
+    CHECK(strstr(page, "Diagnostics") && strstr(page, "peak 3200 / rms 850") && strstr(page, "-56 dBm") && strstr(page, "7200 KB"));
     CHECK(strstr(page, "name=dgkey") && strstr(page, "console.deepgram.com"));
     CHECK(strstr(page, "type=password") != NULL);
     /* first boot: no key -> no ask box, Sonnet selected shows */
@@ -247,23 +253,48 @@ static vad_result_t run_vad(const int *pattern, int n, int *frames_used)
     return r;
 }
 
+static void test_mood(void)
+{
+    char buf[128];
+    strcpy(buf, "[mood:happy] Good morning Bryan.");
+    CHECK(au_extract_mood(buf) == AU_MOOD_HAPPY && strcmp(buf, "Good morning Bryan.") == 0);
+    strcpy(buf, "  [MOOD:Curious]  Wait, really?");
+    CHECK(au_extract_mood(buf) == AU_MOOD_CURIOUS && strcmp(buf, "Wait, really?") == 0);
+    strcpy(buf, "[mood:surprised]\nWhoa!");
+    CHECK(au_extract_mood(buf) == AU_MOOD_SURPRISED && strcmp(buf, "Whoa!") == 0);
+    strcpy(buf, "[mood:sad] Sorry about that.");
+    CHECK(au_extract_mood(buf) == AU_MOOD_SAD && strcmp(buf, "Sorry about that.") == 0);
+    strcpy(buf, "[mood:bored] Nothing new.");
+    CHECK(au_extract_mood(buf) == AU_MOOD_BORED && strcmp(buf, "Nothing new.") == 0);
+    strcpy(buf, "[mood:sleepy] Yawn.");
+    CHECK(au_extract_mood(buf) == AU_MOOD_SLEEPY && strcmp(buf, "Yawn.") == 0);
+    strcpy(buf, "[mood:unknown] Still clean.");
+    CHECK(au_extract_mood(buf) == AU_MOOD_NONE && strcmp(buf, "Still clean.") == 0);
+    strcpy(buf, "No mood tag here.");
+    CHECK(au_extract_mood(buf) == AU_MOOD_NONE && strcmp(buf, "No mood tag here.") == 0);
+}
+
 static void test_vad(void)
 {
     int pat[600], used;
     int16_t pcm[4] = { 1000, -1000, 1000, -1000 };
     CHECK(au_rms(pcm, 4) == 1000 && au_rms(NULL, 0) == 0);
-    /* 0.5 s quiet, 2 s speech, then quiet -> DONE about 1.1 s after speech ends */
+    /* DC offset of +2500 stripped by au_rms_ac */
+    int16_t dc_quiet[4] = { 2550, 2450, 2550, 2450 };
+    uint16_t pk = 0;
+    CHECK(au_rms_ac(dc_quiet, 4, &pk) == 50 && pk == 50);
+    /* 0.5 s quiet, 2 s speech, then quiet -> DONE about 0.9 s after speech ends */
     for (int i = 0; i < 600; i++) pat[i] = (i >= 16 && i < 78) ? 3000 : 120;
-    CHECK(run_vad(pat, 600, &used) == AU_VAD_DONE && used >= 78 + 33 && used <= 78 + 36);
-    /* only quiet -> NO_SPEECH at 7 s */
+    CHECK(run_vad(pat, 600, &used) == AU_VAD_DONE && used >= 78 + 27 && used <= 78 + 30);
+    /* only quiet -> NO_SPEECH at 5 s */
     for (int i = 0; i < 600; i++) pat[i] = 150;
-    CHECK(run_vad(pat, 600, &used) == AU_VAD_NO_SPEECH && used * 32 >= 7000 && used * 32 < 7100);
+    CHECK(run_vad(pat, 600, &used) == AU_VAD_NO_SPEECH && used * 32 >= 5000 && used * 32 < 5100);
     /* a short click does not count as speech */
     for (int i = 0; i < 600; i++) pat[i] = (i == 20 || i == 21) ? 5000 : 150;
     CHECK(run_vad(pat, 600, &used) == AU_VAD_NO_SPEECH);
-    /* nonstop talking -> MAX_LEN at 15 s */
+    /* nonstop talking -> MAX_LEN at 8 s */
     for (int i = 0; i < 600; i++) pat[i] = 4000 + (i % 7) * 100;
-    CHECK(run_vad(pat, 600, &used) == AU_VAD_MAX_LEN && used * 32 >= 15000);
+    CHECK(run_vad(pat, 600, &used) == AU_VAD_MAX_LEN && used * 32 >= 8000 && used * 32 < 8100);
     /* noisy room: background 900 adapts, speech at 4000 still detected */
     for (int i = 0; i < 600; i++) pat[i] = (i >= 30 && i < 90) ? 4000 : 900 + (i % 3) * 50;
     CHECK(run_vad(pat, 600, &used) == AU_VAD_DONE);
@@ -288,6 +319,7 @@ int main(void)
     test_speech_clean();
     test_wav();
     test_prompt();
+    test_mood();
     test_vad();
     test_protocol_states();
     printf("%d checks, %d failed\n", checks, fails);
