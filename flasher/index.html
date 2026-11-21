@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Grok Sphere (Thad + Claude) - Web Flasher</title>
+<script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
+<style>
+ body{font-family:"Segoe UI",-apple-system,Helvetica,Arial,sans-serif;max-width:680px;margin:40px auto;padding:0 16px;line-height:1.55;background:#080b0a;color:#e8f0ec}
+ h1{font-size:28px;color:#00C972;margin-bottom:6px}
+ li{margin:8px 0}
+ .card{background:#101915;border:1px solid #22382c;border-radius:12px;padding:16px 20px;margin:18px 0}
+ .warn{background:#231b0e;border:1px solid #594318;border-radius:12px;padding:14px 18px;margin:18px 0;color:#fde6a8}
+ esp-web-install-button{--esp-tools-button-color:#00C972;--esp-tools-button-text-color:#04120b}
+ code{background:#16241d;padding:2px 6px;border-radius:5px;color:#7ef7be}
+</style>
+</head>
+<body>
+<h1>Grok Sphere — Thad + Claude Edition</h1>
+<p>Browser installer for Windows (use <b>Google Chrome</b> or <b>Microsoft Edge</b>).</p>
+
+<div class="card">
+<ol>
+ <li>Plug the sphere into your Windows PC using a USB-C <b>data</b> cable (plug directly into the PC, not a hub).</li>
+ <li>Click <b>Install</b> below, pick the port named <i>USB JTAG/serial debug unit</i> (or <i>USB Serial Device</i>) under COM ports, and click Connect.</li>
+ <li>If asked about <b>Erase device</b>: leave it <b>unchecked</b> to keep your saved Wi-Fi settings, or check it for a clean wipe.</li>
+ <li>When finished, unplug and replug (or press RESET). The original two white eyes appear!</li>
+</ol>
+<esp-web-install-button manifest="manifest.json">
+  <span slot="unsupported">This browser cannot flash boards over USB. Open this page in Google Chrome or Microsoft Edge on Windows.</span>
+  <span slot="not-allowed">Open this page via <code>serve_web_flasher.bat</code> (http://localhost:8000) or https://.</span>
+</esp-web-install-button>
+</div>
+
+<div class="warn">
+<b>No COM port shows up in Windows?</b>
+<ol>
+ <li>Hold the sphere's <b>BOOT</b> button while plugging in the USB cable, keep holding for 2 seconds, then release. (Or hold BOOT and tap RESET.)</li>
+ <li>Try a known <b>data</b> USB-A-to-USB-C cable in a rear/direct PC USB port — many USB-C cables are power-only.</li>
+ <li>Check Windows <b>Device Manager</b> &rarr; <i>Ports (COM &amp; LPT)</i>. See the README for the 1-minute Windows driver fix if it appears under <i>Universal Serial Bus devices</i> with a warning icon.</li>
+</ol>
+</div>
+</body>
+</html>
