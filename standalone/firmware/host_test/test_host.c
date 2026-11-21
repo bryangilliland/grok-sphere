@@ -57,7 +57,7 @@ static void test_page(void)
         .ssid = "HomeNet", .wifi_connected = true, .ip = "192.168.1.50",
         .api_key_masked = masked, .speech_key_masked = "", .model = 0, .voice = "aura-2-orion-en",
         .volume = 70, .wake_enabled = true, .wake_word = "wn9_hiesp",
-        .chime_enabled = false, .scan_ssids = scans, .scan_n = 3,
+        .chime_enabled = false, .location = "Austin, TX", .scan_ssids = scans, .scan_n = 3,
         .last_q = "What's 2+2?", .last_a = "Four.", .notice = "Saved.",
         .diag_err = "None", .diag_mic_peak = 3200, .diag_mic_rms = 850,
         .diag_noise_floor = 420, .diag_speech_detected = true, .diag_rec_ms = 2400,
@@ -81,6 +81,7 @@ static void test_page(void)
     CHECK(strstr(page, "value=\"wn9_hiesp\" selected>Hi, ESP"));
     CHECK(strstr(page, "value=\"wn9_alexa\"") && strstr(page, "value=\"wn9_jarvis_tts\"") && strstr(page, "value=\"wn9_computer_tts\""));
     CHECK(!strstr(page, "name=chime value=1 checked"));
+    CHECK(strstr(page, "name=loc") && strstr(page, "Austin, TX"));
     CHECK(strstr(page, "action=/moods") && strstr(page, "Preview moods"));
     CHECK(strstr(page, "Diagnostics") && strstr(page, "peak 3200 / rms 850") && strstr(page, "-56 dBm") && strstr(page, "7200 KB"));
     CHECK(strstr(page, "Noise floor") && strstr(page, "420") && strstr(page, "Speech detected") && strstr(page, "2.4 s") && strstr(page, "min 72 KB"));
@@ -234,12 +235,29 @@ static void test_wav(void)
 
 static void test_prompt(void)
 {
-    char p[1200];
-    int n = au_system_prompt(p, sizeof(p), "Saturday, November 21, 2026, 11:30 AM");
+    char p[1800];
+    int n = au_system_prompt(p, sizeof(p), "Saturday, November 21, 2026, 4:05 PM",
+                             "Fort Worth, TX: 72 F (feels like 70 F), mostly clear, wind 9 mph; today's high 72 F, low 58 F, rain chance 12%.");
     CHECK(n > 200 && n < (int)sizeof(p));
-    CHECK(strstr(p, "Thad") && strstr(p, "Fort Worth") && strstr(p, "November 21, 2026") && strstr(p, "no markdown"));
-    au_system_prompt(p, sizeof(p), "");
-    CHECK(!strstr(p, "Current local date"));
+    CHECK(strstr(p, "Thad") && strstr(p, "Fort Worth") && strstr(p, "November 21, 2026") && strstr(p, "72 F") && strstr(p, "accurate and current"));
+    au_system_prompt(p, sizeof(p), "", "");
+    CHECK(!strstr(p, "Current local date") && !strstr(p, "Live local weather"));
+
+    /* sentence splitter for pipelined TTS */
+    const char *starts[6];
+    size_t lens[6];
+    const char *reply = "It is 71.9 degrees and sunny in Fort Worth right now. Tonight drops to 58 with light wind. Want a jacket!";
+    int segs = au_split_sentences(reply, starts, lens, 6);
+    CHECK(segs == 2 || segs == 3);
+    CHECK(strncmp(starts[0], "It is 71.9", 10) == 0);
+    CHECK(au_split_sentences("Short reply.", starts, lens, 6) == 1);
+
+    /* lat/lon parser */
+    double lat = 0, lon = 0;
+    CHECK(au_parse_latlon("32.7555, -97.3308", &lat, &lon) && lat > 32.7 && lon < -97.3);
+    CHECK(au_parse_latlon("30.2672 -97.7431", &lat, &lon));
+    CHECK(!au_parse_latlon("Fort Worth, TX", &lat, &lon));
+    CHECK(!au_parse_latlon("95.0, -97.0", &lat, &lon));
 }
 
 static vad_result_t run_vad(const int *pattern, int n, int *frames_used)
