@@ -326,20 +326,88 @@ au_mood_t au_extract_mood(char *text)
     return mood;
 }
 
-int au_system_prompt(char *out, size_t cap, const char *local_time)
+int au_system_prompt(char *out, size_t cap, const char *local_time, const char *weather_summary)
 {
     return snprintf(out, cap,
-        "You are Thad, Bryan Gilliland's personal assistant, living in a small round desk sphere "
-        "with two white eyes. Bryan lives in Fort Worth, Texas (US Central time). "
+        "You are Thad, Bryan Gilliland's personal assistant, running on his desk sphere (Grok Sphere) "
+        "with two white eyes. "
         "Everything you write is read aloud by a text-to-speech voice and shown on a tiny round screen, so: "
-        "answer in one to three short sentences (under 60 words) unless he asks for more; "
+        "answer in 1 to 3 short spoken sentences; "
         "plain conversational English; no markdown, lists, emojis, URLs or code. "
         "Be warm, direct and a little witty. If you are unsure, say so briefly. "
         "Optionally start your reply with a hidden tag [mood:happy], [mood:curious], [mood:surprised], "
         "or [mood:sad] when it fits the tone (never mention the tag). "
-        "You cannot browse the web, send email, or see his calendar from this device.%s%s",
+        "You cannot browse the web, send email, or see his calendar from this device."
+        "%s%s%s%s%s",
         (local_time && local_time[0]) ? " Current local date and time: " : "",
-        (local_time && local_time[0]) ? local_time : "");
+        (local_time && local_time[0]) ? local_time : "",
+        (weather_summary && weather_summary[0]) ? " Live local weather and forecast: " : "",
+        (weather_summary && weather_summary[0]) ? weather_summary : "",
+        ((local_time && local_time[0]) || (weather_summary && weather_summary[0]))
+            ? " This live date, time, and weather data on the sphere is accurate and current; use it directly when asked."
+            : "");
+}
+
+int au_split_sentences(const char *text, const char **starts, size_t *lens, int max_segs)
+{
+    if (!text || !text[0] || !starts || !lens || max_segs <= 0) return 0;
+    const char *p = text;
+    while (*p == ' ') p++;
+    if (!*p) return 0;
+
+    int count = 0;
+    const char *seg_start = p;
+    for (; *p; p++) {
+        bool end_punct = (*p == '.' || *p == '!' || *p == '?');
+        bool next_ok = (p[1] == ' ' || p[1] == '\0');
+        if (end_punct && next_ok) {
+            size_t len = (size_t)((p + 1) - seg_start);
+            if (len >= 28 && count + 1 < max_segs) {
+                /* Only split if there is substantial text remaining (>= 20 chars) */
+                const char *rest = p + 1;
+                while (*rest == ' ') rest++;
+                if (strlen(rest) >= 20) {
+                    starts[count] = seg_start;
+                    lens[count] = len;
+                    count++;
+                    seg_start = rest;
+                    p = rest - 1;
+                }
+            }
+        }
+    }
+    if (*seg_start) {
+        size_t len = strlen(seg_start);
+        while (len && seg_start[len - 1] == ' ') len--;
+        if (len) {
+            starts[count] = seg_start;
+            lens[count] = len;
+            count++;
+        }
+    }
+    return count;
+}
+
+bool au_parse_latlon(const char *loc, double *lat_out, double *lon_out)
+{
+    if (!loc || !loc[0] || !lat_out || !lon_out) return false;
+    const char *p = loc;
+    while (*p && isspace((unsigned char)*p)) p++;
+    if (!*p) return false;
+    char *end1 = NULL;
+    double lat = strtod(p, &end1);
+    if (end1 == p) return false;
+    while (*end1 && (isspace((unsigned char)*end1) || *end1 == ',')) end1++;
+    if (!*end1) return false;
+    char *end2 = NULL;
+    double lon = strtod(end1, &end2);
+    if (end2 == end1) return false;
+    while (*end2 && isspace((unsigned char)*end2)) end2++;
+    if (*end2 != '\0') return false;
+    if (lat < -90.0 || lat > 90.0 || lon < -180.0 || lon > 180.0) return false;
+    *lat_out = lat;
+    *lon_out = lon;
+    return true;
 }
 
 /* ----------------------------------------------------------------- VAD */

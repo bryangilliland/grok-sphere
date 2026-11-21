@@ -23,7 +23,7 @@
 #include "freertos/stream_buffer.h"
 #include "freertos/task.h"
 
-#define PLAY_BUF_BYTES   (1024 * 1024)   /* ~32 s of 16 kHz mono in PSRAM */
+#define PLAY_BUF_BYTES   (2 * 1024 * 1024) /* ~64 s of 16 kHz mono in PSRAM */
 #define PLAY_CHUNK       256             /* samples per write (16 ms) */
 #define MIC_GAIN_DB      30.0f
 #define DEFAULT_VOLUME   70
@@ -43,8 +43,8 @@ static audio_done_cb_t s_done_cb;
 static esp_err_t init_v2(void)
 {
     i2s_chan_config_t chan = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
-    chan.dma_desc_num = 6;
-    chan.dma_frame_num = 240;
+    chan.dma_desc_num = 8;
+    chan.dma_frame_num = 480;
     chan.auto_clear = true;
     ESP_ERROR_CHECK(i2s_new_channel(&chan, &s_tx, &s_rx));
 
@@ -128,8 +128,8 @@ static esp_err_t init_v2(void)
 static esp_err_t init_v1(void)
 {
     i2s_chan_config_t chan = I2S_CHANNEL_DEFAULT_CONFIG(I2S_NUM_0, I2S_ROLE_MASTER);
-    chan.dma_desc_num = 6;
-    chan.dma_frame_num = 240;
+    chan.dma_desc_num = 8;
+    chan.dma_frame_num = 480;
     chan.auto_clear = true;
     ESP_ERROR_CHECK(i2s_new_channel(&chan, &s_tx, NULL));
     i2s_std_config_t std = {
@@ -243,6 +243,8 @@ esp_err_t audio_init(board_audio_rev_t rev, audio_done_cb_t on_stream_done)
 
 void audio_stream_begin(void)
 {
+    for (int i = 0; i < 6 && s_flush; i++) vTaskDelay(pdMS_TO_TICKS(15));
+    s_flush = false;
     s_stream_ended = false;
     s_stream_active = true;
 }
@@ -251,12 +253,8 @@ void audio_stream_push(const uint8_t *pcm, size_t len)
 {
     len &= ~(size_t)1;
     size_t off = 0;
-    while (off < len) {
-        size_t sent = xStreamBufferSend(s_play, pcm + off, len - off, pdMS_TO_TICKS(500));
-        if (sent == 0) {
-            ESP_LOGW(TAG, "playback buffer full, dropping %u bytes", (unsigned)(len - off));
-            return;
-        }
+    while (off < len && !s_flush) {
+        size_t sent = xStreamBufferSend(s_play, pcm + off, len - off, pdMS_TO_TICKS(100));
         off += sent;
     }
 }

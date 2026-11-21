@@ -71,9 +71,13 @@ typedef enum {
     AU_MOOD_CURIOUS,
 } au_mood_t;
 
-int au_system_prompt(char *out, size_t cap, const char *local_time);
+int au_system_prompt(char *out, size_t cap, const char *local_time, const char *weather_summary);
 /* Strip an optional leading "[mood:...]" tag in place and return the parsed mood. */
 au_mood_t au_extract_mood(char *text);
+/* Split spoken text into up to max_segs natural sentences for pipelined TTS. Returns segment count. */
+int au_split_sentences(const char *text, const char **starts, size_t *lens, int max_segs);
+/* Parse "lat, lon" (or "lat lon") coordinates; returns true if valid [-90..90, -180..180]. */
+bool au_parse_latlon(const char *loc, double *lat_out, double *lon_out);
 
 /* -------- simple energy voice-activity detector for push-to-talk auto-stop -------- */
 typedef enum { AU_VAD_WAITING = 0, AU_VAD_SPEECH, AU_VAD_DONE, AU_VAD_NO_SPEECH, AU_VAD_MAX_LEN } vad_result_t;
